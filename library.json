@@ -1,0 +1,66 @@
+{
+  "name": "PeripheralsLib",
+  "version": "1.0.0",
+  "description": "Library for various peripheral devices including LEDs, displays, buzzers, and sensors",
+  "keywords": "esp32, peripherals, led, display, buzzer, sensor",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EnergetickaAkademie/PeripheralsLib.git"
+  },
+  "authors": [
+    {
+      "name": "Energeticka Akademie",
+      "maintainer": true
+    }
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/EnergetickaAkademie/PeripheralsLib",
+  "dependencies": [
+    {
+      "name": "LedControl",
+      "authors": "Eberhard Fahle",
+      "frameworks": "arduino"
+    },
+    {
+      "name": "MFRC522v2",
+      "version": ">=2.0.0",
+      "authors": "OSSLibraries",
+      "frameworks": "arduino"
+    },
+    {
+      "name": "Adafruit GFX Library",
+      "version": "^1.11.9",
+      "authors": "Adafruit",
+      "frameworks": "arduino"
+    },
+    {
+      "name": "Adafruit SSD1306",
+      "version": "^2.5.9",
+      "authors": "Adafruit",
+      "frameworks": "arduino"
+    },
+    {
+      "name": "Adafruit NeoPixel",
+      "authors": "Adafruit",
+      "frameworks": "arduino"
+    },
+    {
+      "name": "ESPRotary",
+      "authors": "Lennart Hennigs",
+      "frameworks": "arduino"
+    },
+    {
+      "name": "Button2",
+      "authors": "Lennart Hennigs",
+      "frameworks": "arduino"
+    },
+    {
+      "name": "LiquidCrystal_I2C",
+      "version": "^1.1.2",
+      "authors": "Marcos Schwartz",
+      "frameworks": "arduino"
+    }
+  ],
+  "frameworks": "arduino",
+  "platforms": ["espressif32", "espressif8266"]
+}
