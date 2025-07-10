@@ -12,6 +12,8 @@
 // ESP-API Library
 #include <ESPGameAPI.h>
 
+#include <power_tracker.h>
+
 // WiFi configuration
 #include "wifi_config.h"
 
@@ -38,21 +40,7 @@ ComProtMaster comProt(1, COMPROT_PIN);
 ESPGameAPI espApi("http://192.168.2.131", BOARD_ID, ESP_API_NAME, BOARD_GENERIC);
 
 // Callback functions for NFC building events
-void onNewBuilding(uint8_t buildingType, const String& uid) {
-    Serial.println("🏢 NEW BUILDING DETECTED!");
-    Serial.println("   Type: " + String(buildingType));
-    Serial.println("   UID: " + uid);
-    Serial.println("   Total buildings: " + String(nfcRegistry.getDatabaseSize()));
-    Serial.println();
-}
 
-void onDeleteBuilding(uint8_t buildingType, const String& uid) {
-    Serial.println("🗑️ BUILDING DELETED!");
-    Serial.println("   Type: " + String(buildingType));
-    Serial.println("   UID: " + uid);
-    Serial.println("   Remaining buildings: " + String(nfcRegistry.getDatabaseSize()));
-    Serial.println();
-}
 
 // WiFi connection function
 bool connectToWiFi() {
@@ -91,8 +79,8 @@ void setup() {
     mfrc522.PCD_DumpVersionToSerial();
     
     // Set up NFC building registry callbacks
-    nfcRegistry.setOnNewBuildingCallback(onNewBuilding);
-    nfcRegistry.setOnDeleteBuildingCallback(onDeleteBuilding);
+    nfcRegistry.setOnNewBuildingCallback(PowerTracker::onNewBuilding);
+    nfcRegistry.setOnDeleteBuildingCallback(PowerTracker::onDeleteBuilding);
     
     Serial.println("NFC Building Registry initialized successfully");
 
@@ -137,5 +125,4 @@ void loop() {
     // Note: ESP-API operations require WiFi connection
     
     // Small delay to prevent overwhelming the system
-    delay(50);
 }

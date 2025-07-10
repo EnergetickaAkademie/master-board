@@ -8,6 +8,7 @@
         {
             "name": "PlatformIO",
             "includePath": [
+                "/home/jirka/programovani/master-board/include",
                 "/home/jirka/programovani/master-board/src",
                 "/home/jirka/programovani/master-board/.pio/libdeps/esp32-s3-devkitc-1/ESPGameAPI/src",
                 "/home/jirka/programovani/master-board/.pio/libdeps/esp32-s3-devkitc-1/ArduinoJson/src",
@@ -264,6 +265,7 @@
             "browse": {
                 "limitSymbolsToIncludedHeaders": true,
                 "path": [
+                    "/home/jirka/programovani/master-board/include",
                     "/home/jirka/programovani/master-board/src",
                     "/home/jirka/programovani/master-board/.pio/libdeps/esp32-s3-devkitc-1/ESPGameAPI/src",
                     "/home/jirka/programovani/master-board/.pio/libdeps/esp32-s3-devkitc-1/ArduinoJson/src",
