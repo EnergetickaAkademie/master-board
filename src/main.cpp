@@ -1,9 +1,13 @@
 /***********************************************************************
  *  Master Board ESP32‑S3 – spin‑lock‑safe version
  *  Last edit: 2025‑07‑28
- **********************************************************************/
+ *********************    */
 #include <Arduino.h>
 #include <WiFi.h>
+
+#include <esp_wifi.h>
+#include <esp_log.h>
+
 #include <SPI.h>
 #include <MFRC522.h>
 #include "PeripheralFactory.h"
@@ -47,7 +51,7 @@
 /* ------------------------------------------------------------------ */
 /*                     ESP‑API / BACKEND SETTINGS                     */
 /* ------------------------------------------------------------------ */
-#define SERVER_URL   "http://192.168.2.131"
+#define SERVER_URL   "http://192.168.50.201/coreapi"
 #define API_USERNAME "board1"
 #define API_PASSWORD "board123"
 
@@ -129,51 +133,88 @@ void updateCoefficientsFromGame()
     }
 }
 
-/* ------------------------------------------------------------------ */
-/*                           Wi‑Fi HELPERS                            */
-/* ------------------------------------------------------------------ */
-static bool tryConnect(const char* ssid,
-                       const char* pass,
-                       uint32_t    timeout_ms = 15000)
-{
-    WiFi.mode(WIFI_STA);
-    WiFi.disconnect(true, true);    // clear old state
-    WiFi.setSleep(false);
 
-    Serial.printf("[WiFi] Trying \"%s\" …\n", ssid);
-    WiFi.begin(ssid, (pass && *pass) ? pass : nullptr);
 
-    const uint32_t start = millis();
-    uint32_t lastPrint   = start;
 
-    while (WiFi.status() != WL_CONNECTED &&
-          (millis() - start) < timeout_ms)
-    {
-        delay(50);    // keep WDT happy
-        yield();      // give Wi‑Fi task time
-
-        if (millis() - lastPrint >= 500) {     // print twice a second
-            Serial.print('.');
-            lastPrint = millis();
-        }
+void printWiFiStatusCode(wl_status_t status) {
+    switch (status) {
+        case WL_IDLE_STATUS:
+            Serial.print("Idle");
+            break;
+        case WL_NO_SSID_AVAIL:
+            Serial.print("No SSID Available");
+            break;
+        case WL_SCAN_COMPLETED:
+            Serial.print("Scan Completed");
+            break;
+        case WL_CONNECTED:
+            Serial.print("Connected");
+            break;
+        case WL_CONNECT_FAILED:
+            Serial.print("Connection Failed");
+            break;
+        case WL_CONNECTION_LOST:
+            Serial.print("Connection Lost");
+            break;
+        case WL_DISCONNECTED:
+            Serial.print("Disconnected");
+            break;
+        default:
+            Serial.print("Unknown Status");
+            break;
     }
-    Serial.println();
-
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.printf("[WiFi] Connected – IP %s, RSSI %d dBm\n",
-                      WiFi.localIP().toString().c_str(), WiFi.RSSI());
-        return true;
-    }
-    Serial.println("[WiFi] Timeout");
-    return false;
 }
-
 bool connectToWiFi()
 {
-    if (tryConnect(WIFI_SSID, WIFI_PASSWORD))               return true;
-    if (tryConnect(BACKUP_WIFI_SSID, BACKUP_WIFI_PASSWORD)) return true;
-    Serial.println("[WiFi] All networks failed");
-    return false;
+
+const char* ssid = "PotkaniNora";
+const char* password = "PrimaryPapikTarget";
+const int max_connection_attempts = 10;
+
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    delay(100);
+     Serial.println("\n🔄 Connecting to WiFi...");
+    Serial.print("SSID: ");
+    Serial.println(ssid);
+    
+    WiFi.begin(ssid, password);
+    
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < max_connection_attempts) {
+        delay(1000);
+        Serial.print(".");
+        attempts++;
+        
+        // Print connection status
+        switch (WiFi.status()) {
+            case WL_NO_SSID_AVAIL:
+                Serial.print(" [SSID not found]");
+                break;
+            case WL_CONNECT_FAILED:
+                Serial.print(" [Connection failed]");
+                break;
+            case WL_CONNECTION_LOST:
+                Serial.print(" [Connection lost]");
+                break;
+            case WL_DISCONNECTED:
+                Serial.print(" [Disconnected]");
+                break;
+        }
+    }
+    
+    Serial.println();
+    
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("✅ WiFi connected successfully!");
+        return true;
+    } else {
+        Serial.println("❌ WiFi connection failed!");
+        Serial.print("Final status: ");
+        printWiFiStatusCode(WiFi.status());
+        Serial.println();
+        return false;
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -189,7 +230,9 @@ void setup()
 
     /* ---------- Wi‑Fi & backend ---------- */
     if (connectToWiFi()) {
+        /*Serial.println("[ESP‑API] Initializing…");
         espApi.setProductionCallback (getProductionValue);
+        Serial.println("[ESP‑API] Registering callbacks…");
         espApi.setConsumptionCallback(getConsumptionValue);
         espApi.setPowerPlantsCallback(getConnectedPowerPlants);
         espApi.setConsumersCallback  (getConnectedConsumers);
@@ -203,38 +246,42 @@ void setup()
             espApi.printStatus();
         } else {
             Serial.println("[ESP‑API] Login or registration failed");
-        }
+        }*/
     }
+    Serial.println("[ESP‑API] Setup done ✓");
 
     /* ---------- Peripherals ---------- */
-    encoder1 = factory.createEncoder(ENCODER1_PIN_A, ENCODER1_PIN_B,
+   /* encoder1 = factory.createEncoder(ENCODER1_PIN_A, ENCODER1_PIN_B,
                                      ENCODER1_PIN_SW, 0, 100, 1);
+Serial.println("[Peripherals] Encoder 1 created");
     encoder2 = factory.createEncoder(ENCODER2_PIN_A, ENCODER2_PIN_B,
                                      ENCODER2_PIN_SW, 0, 100, 1);
     encoder3 = factory.createEncoder(ENCODER3_PIN_A, ENCODER3_PIN_B,
                                      ENCODER3_PIN_SW, 0, 255, 1);
     encoder4 = factory.createEncoder(ENCODER4_PIN_A, ENCODER4_PIN_B,
                                      ENCODER4_PIN_SW, 0, 255, 1);
-
+Serial.println("[Peripherals] Encoders 2, 3, and 4 created");
     encoder1->setValue(50);
     encoder2->setValue(50);
+    Serial.println("[Peripherals] Encoders initialized");
 
     shiftChain = factory.createShiftRegisterChain(LATCH_PIN, DATA_PIN, CLOCK_PIN);
 
     bargraph1 = factory.createBargraph(shiftChain, 10);
+    Serial.println("[Peripherals] Bargraph 1 created");
     bargraph2 = factory.createBargraph(shiftChain, 10);
     bargraph3 = factory.createBargraph(shiftChain, 10);
     bargraph4 = factory.createBargraph(shiftChain, 10);
     bargraph5 = factory.createBargraph(shiftChain, 10);
     bargraph6 = factory.createBargraph(shiftChain, 10);
-
+        Serial.println("[Peripherals] Bargraphs 2, 3, 4, 5, and 6 created");
     display1  = factory.createSegmentDisplay(shiftChain, 4);
     display2  = factory.createSegmentDisplay(shiftChain, 4);
     display3  = factory.createSegmentDisplay(shiftChain, 4);
     display4  = factory.createSegmentDisplay(shiftChain, 4);
     display5  = factory.createSegmentDisplay(shiftChain, 4);
     display6  = factory.createSegmentDisplay(shiftChain, 4);
-
+*/
     Serial.println("Setup done ✓");
 }
 
@@ -243,13 +290,11 @@ void setup()
 /* ------------------------------------------------------------------ */
 void loop()
 {
-    factory.update();                        // encoders, bargraphs, etc.
+    /*factory.update();                        // encoders, bargraphs, etc.
 
-    /* ---------------- ESP‑API polling ---------------- */
     if (WiFi.status() == WL_CONNECTED && espApi.update())
         updateCoefficientsFromGame();
 
-    /* ---------------- Display refresh ---------------- */
     if (millis() - lastUpdateTime >= DISPLAY_UPDATE_INTERVAL_MS) {
         lastUpdateTime = millis();
 
@@ -258,13 +303,11 @@ void loop()
         const uint8_t value3 = encoder3->getValue();
         const uint8_t value4 = encoder4->getValue();
 
-        /* numeric displays */
         display1->displayNumber(coalOutputW());
         display2->displayNumber(gasOutputW());
         display3->displayNumber(static_cast<long>(value3));
         display4->displayNumber(static_cast<long>(value4));
 
-        /* bar graphs */
         bargraph1->setValue(static_cast<uint8_t>(coalPowerSetting / 10));
         bargraph2->setValue(static_cast<uint8_t>(gasPowerSetting  / 10));
         bargraph3->setValue(static_cast<uint8_t>((float)value3 / 25.5f));
@@ -283,7 +326,6 @@ void loop()
         }
     }
 
-    /* ---------------- Slow debug print ---------------- */
     if (millis() - lastDebugTime >= POWER_PLANT_DEBUG_INTERVAL) {
         lastDebugTime = millis();
         Serial.printf("[PLANTS] Coal %.0f%% → %.1f W (c=%.2f) | "
@@ -293,7 +335,6 @@ void loop()
                       espApi.isGameActive() ? "ON" : "OFF");
     }
 
-    /* ---------------- CLI (USB serial) ---------------- */
     if (Serial.available()) {
         String cmd = Serial.readStringUntil('\n');
         cmd.trim();
@@ -305,7 +346,6 @@ void loop()
             WiFi.disconnect();
             connectToWiFi();
         }
-    }
+    }*/
 
-    delay(10);   // light breath for the scheduler
 }
