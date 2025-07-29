@@ -30,8 +30,8 @@
 #define NFC_SS_PIN         5
 #define BUZZER_PIN        35
 
-#define COMPROT_PIN       18            // ← keeps 18
-#define CLOCK_PIN         19            // ← moved here, avoids clash
+#define COMPROT_PIN       19            // ← keeps 18
+#define CLOCK_PIN         18            // ← moved here, avoids clash
 #define LATCH_PIN         16
 #define DATA_PIN          17
 
@@ -230,7 +230,7 @@ void setup()
 
     /* ---------- Wi‑Fi & backend ---------- */
     if (connectToWiFi()) {
-        /*Serial.println("[ESP‑API] Initializing…");
+        Serial.println("[ESP‑API] Initializing…");
         espApi.setProductionCallback (getProductionValue);
         Serial.println("[ESP‑API] Registering callbacks…");
         espApi.setConsumptionCallback(getConsumptionValue);
@@ -246,12 +246,12 @@ void setup()
             espApi.printStatus();
         } else {
             Serial.println("[ESP‑API] Login or registration failed");
-        }*/
+        }
     }
     Serial.println("[ESP‑API] Setup done ✓");
 
     /* ---------- Peripherals ---------- */
-   /* encoder1 = factory.createEncoder(ENCODER1_PIN_A, ENCODER1_PIN_B,
+    encoder1 = factory.createEncoder(ENCODER1_PIN_A, ENCODER1_PIN_B,
                                      ENCODER1_PIN_SW, 0, 100, 1);
 Serial.println("[Peripherals] Encoder 1 created");
     encoder2 = factory.createEncoder(ENCODER2_PIN_A, ENCODER2_PIN_B,
@@ -266,22 +266,18 @@ Serial.println("[Peripherals] Encoders 2, 3, and 4 created");
     Serial.println("[Peripherals] Encoders initialized");
 
     shiftChain = factory.createShiftRegisterChain(LATCH_PIN, DATA_PIN, CLOCK_PIN);
-
-    bargraph1 = factory.createBargraph(shiftChain, 10);
-    Serial.println("[Peripherals] Bargraph 1 created");
-    bargraph2 = factory.createBargraph(shiftChain, 10);
-    bargraph3 = factory.createBargraph(shiftChain, 10);
-    bargraph4 = factory.createBargraph(shiftChain, 10);
     bargraph5 = factory.createBargraph(shiftChain, 10);
-    bargraph6 = factory.createBargraph(shiftChain, 10);
-        Serial.println("[Peripherals] Bargraphs 2, 3, 4, 5, and 6 created");
-    display1  = factory.createSegmentDisplay(shiftChain, 4);
-    display2  = factory.createSegmentDisplay(shiftChain, 4);
-    display3  = factory.createSegmentDisplay(shiftChain, 4);
-    display4  = factory.createSegmentDisplay(shiftChain, 4);
     display5  = factory.createSegmentDisplay(shiftChain, 4);
-    display6  = factory.createSegmentDisplay(shiftChain, 4);
-*/
+    bargraph4 = factory.createBargraph(shiftChain, 10);
+    display4  = factory.createSegmentDisplay(shiftChain, 4);
+    bargraph3 = factory.createBargraph(shiftChain, 10);
+    display3  = factory.createSegmentDisplay(shiftChain, 4);
+    bargraph2 = factory.createBargraph(shiftChain, 10);
+    display2  = factory.createSegmentDisplay(shiftChain, 4);
+    bargraph1 = factory.createBargraph(shiftChain, 10);
+    display1  = factory.createSegmentDisplay(shiftChain, 4);
+
+    
     Serial.println("Setup done ✓");
 }
 
@@ -290,8 +286,25 @@ Serial.println("[Peripherals] Encoders 2, 3, and 4 created");
 /* ------------------------------------------------------------------ */
 void loop()
 {
-    /*factory.update();                        // encoders, bargraphs, etc.
+    factory.update();                        // encoders, bargraphs, etc.
 
+    /*if (millis() - lastUpdateTime >= 1000) {
+        lastUpdateTime = millis();
+        
+        display1->displayNumber(8888.0,1); // display seconds since last update
+        display2->displayNumber(8888.0,1);
+        display3->displayNumber(8888.0,1);
+        display4->displayNumber(8888.0,1);
+        display5->displayNumber(8888.0,1);
+        bargraph1->setValue(4);
+        bargraph2->setValue(5);
+        bargraph3->setValue(4);
+        bargraph4->setValue(5);
+        bargraph5->setValue(4);
+        Serial.printf("[Peripherals] Updated displays and bargraphs at %lu ms\n", millis());
+
+    }*/
+    
     if (WiFi.status() == WL_CONNECTED && espApi.update())
         updateCoefficientsFromGame();
 
@@ -346,6 +359,6 @@ void loop()
             WiFi.disconnect();
             connectToWiFi();
         }
-    }*/
+    }
 
 }
