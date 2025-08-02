@@ -1,71 +1,52 @@
 /***********************************************************************
- *  Master Board ESP32‑S3 – spin‑lock‑safe version
+ *  Master Board ESP32‑S3 – spin‑lock‑safe version
  *  Last edit: 2025‑07‑28
- *********************    */
+ ******************************************************************************/
 #include <Arduino.h>
 #include <WiFi.h>
-
-#include <esp_wifi.h>
-#include <esp_log.h>
 #include "PeripheralFactory.h"
-
-
 #include <SPI.h>
-#include <MFRC522.h>
-#include <NFCBuildingRegistry.h>
-#include <com-prot.h>
-#include <ESPGameAPI.h>
-#include <power_tracker.h>
 
 #include "board_config.h"
 #include "power_plant_config.h"
-#include "wifi_config.h"
-#include <atomic>
+#include "GameManager.h"
 
 /* ------------------------------------------------------------------ */
 /*                             PIN MAP                                */
 /* ------------------------------------------------------------------ */
-#define NFC_SCK_PIN       40
-#define NFC_MISO_PIN      41
-#define NFC_MOSI_PIN      39
-#define NFC_RST_PIN       42
-#define NFC_SS_PIN         5
 #define BUZZER_PIN        35
 
-#define COMPROT_PIN       19            // ← keeps 18
-#define CLOCK_PIN         18            // ← moved here, avoids clash
-#define LATCH_PIN         16
-#define DATA_PIN          17
+#define CLOCK_PIN         18            // Shift register clock
+#define LATCH_PIN         16            // Shift register latch  
+#define DATA_PIN          17            // Shift register data
 
-#define ENCODER4_PIN_A     7
-#define ENCODER4_PIN_B     8
-#define ENCODER4_PIN_SW    9
 #define ENCODER1_PIN_A     4
 #define ENCODER1_PIN_B     5
 #define ENCODER1_PIN_SW    6
-#define ENCODER3_PIN_A    13
-#define ENCODER3_PIN_B    14
-#define ENCODER3_PIN_SW   15
 #define ENCODER2_PIN_A    10
 #define ENCODER2_PIN_B    11
 #define ENCODER2_PIN_SW   12
 
-/* ------------------------------------------------------------------ */
-/*                     ESP‑API / BACKEND SETTINGS                     */
-/* ------------------------------------------------------------------ */
-#define SERVER_URL   "http://192.168.50.201"
-#define API_USERNAME "board1"
-#define API_PASSWORD "board123"
+/* Future power plant encoders - pins reserved but not currently used */
+// #define ENCODER3_PIN_A    13
+// #define ENCODER3_PIN_B    14
+// #define ENCODER3_PIN_SW   15
+// #define ENCODER4_PIN_A     7
+// #define ENCODER4_PIN_B     8
+// #define ENCODER4_PIN_SW    9
+
+/* Unused pins for future expansion */
+// #define NFC_SCK_PIN       40
+// #define NFC_MISO_PIN      41
+// #define NFC_MOSI_PIN      39
+// #define NFC_RST_PIN       42
+// #define NFC_SS_PIN         5
+// #define COMPROT_PIN       19
 
 /* ------------------------------------------------------------------ */
-/*                    GLOBAL STATE & FORWARD DECLS                    */
+/*                    GLOBAL STATE & FORWARD DECLS                    */
 /* ------------------------------------------------------------------ */
-std::atomic<float> coalPowerSetting(50.0f);   // %
-std::atomic<float> gasPowerSetting(50.0f);   // %
-std::atomic<float> coalCoefficient(1.0f);
-std::atomic<float> gasCoefficient(1.0f);
-std::atomic<float> coalPowerPercentage(0.5f); // 50%
-std::atomic<float> gasPowerPercentage(0.5f);  // 50%
+// Game state is now managed by GameManager singleton
 unsigned long lastUpdateTime = 0;
 unsigned long lastDebugTime  = 0;
 
@@ -79,45 +60,11 @@ Bargraph        *bargraph1 = nullptr, *bargraph2 = nullptr,
 SegmentDisplay  *display1  = nullptr, *display2  = nullptr,
                 *display3  = nullptr, *display4  = nullptr,
                 *display5  = nullptr, *display6  = nullptr;
-Encoder         *encoder1  = nullptr, *encoder2  = nullptr,
-                *encoder3  = nullptr, *encoder4  = nullptr;
-
-/* ---------------- Game API instance ------------------------------ */
-ESPGameAPI espApi(SERVER_URL, BOARD_NAME, BOARD_GENERIC);
+Encoder         *encoder1  = nullptr, *encoder2  = nullptr;
 
 /* ------------------------------------------------------------------ */
-/*                     GAME / POWER‑PLANT CALLBACKS                   */
+/*                        WIFI CONNECTION                             */
 /* ------------------------------------------------------------------ */
-float getProductionValue()
-{
-    return gasPowerSetting + coalPowerSetting;
-}
-
-float getConsumptionValue() { return 0.0f; }
-
-std::vector<ConnectedPowerPlant> getConnectedPowerPlants()
-{
-    std::vector<ConnectedPowerPlant> plants;
-    plants.push_back({COAL_PLANT_ID,
-       coalPowerSetting});
-    plants.push_back({GAS_PLANT_ID,gasPowerSetting});
-    return plants;
-}
-
-std::vector<ConnectedConsumer> getConnectedConsumers() { return {}; }
-
-
-
-void updateCoefficientsFromGame()
-{
-    for (const auto &c : espApi.getProductionCoefficients()) {
-        if (c.source_id == COAL_PLANT_ID) coalCoefficient = c.coefficient;
-        else if (c.source_id == GAS_PLANT_ID) gasCoefficient  = c.coefficient;
-    }
-}
-
-
-
 
 void printWiFiStatusCode(wl_status_t status) {
     switch (status) {
@@ -147,17 +94,17 @@ void printWiFiStatusCode(wl_status_t status) {
             break;
     }
 }
+
 bool connectToWiFi()
 {
-
-const char* ssid = "PotkaniNora";
-const char* password = "PrimaryPapikTarget";
-const int max_connection_attempts = 10;
+    const char* ssid = "PotkaniNora";
+    const char* password = "PrimaryPapikTarget";
+    const int max_connection_attempts = 10;
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
     delay(100);
-     Serial.println("\n🔄 Connecting to WiFi...");
+    Serial.println("\n🔄 Connecting to WiFi...");
     Serial.print("SSID: ");
     Serial.println(ssid);
     
@@ -204,22 +151,17 @@ const int max_connection_attempts = 10;
 /*                               SETUP                                */
 /* ------------------------------------------------------------------ */
 
-
 void initPeripherals()
 {
     /* ---------- Peripherals ---------- */
     encoder1 = factory.createEncoder(ENCODER1_PIN_A, ENCODER1_PIN_B,
                                      ENCODER1_PIN_SW, 0, 1000, 1);
-Serial.println("[Peripherals] Encoder 1 created");
+    Serial.println("[Peripherals] Encoder 1 created");
     encoder2 = factory.createEncoder(ENCODER2_PIN_A, ENCODER2_PIN_B,
                                      ENCODER2_PIN_SW, 0, 1000, 1);
-    encoder3 = factory.createEncoder(ENCODER3_PIN_A, ENCODER3_PIN_B,
-                                     ENCODER3_PIN_SW, 0, 255, 1);
-    encoder4 = factory.createEncoder(ENCODER4_PIN_A, ENCODER4_PIN_B,
-                                     ENCODER4_PIN_SW, 0, 255, 1);
-Serial.println("[Peripherals] Encoders 2, 3, and 4 created");
-    encoder1->setValue(50);
-    encoder2->setValue(50);
+    Serial.println("[Peripherals] Encoder 2 created");
+    encoder1->setValue(500);  // 50%
+    encoder2->setValue(500);  // 50%
     Serial.println("[Peripherals] Encoders initialized");
 
     shiftChain = factory.createShiftRegisterChain(LATCH_PIN, DATA_PIN, CLOCK_PIN);
@@ -236,7 +178,7 @@ Serial.println("[Peripherals] Encoders 2, 3, and 4 created");
     bargraph1 = factory.createBargraph(shiftChain, 10);
     display1  = factory.createSegmentDisplay(shiftChain, 4);
 
-    display1->displayNumber(8878.0,1); // display seconds since last update
+    display1->displayNumber(8878.0,1); // display test pattern
     display2->displayNumber(8878.0,1);
     display3->displayNumber(8878.0,1);
     display4->displayNumber(8878.0,1);
@@ -247,36 +189,34 @@ Serial.println("[Peripherals] Encoders 2, 3, and 4 created");
     bargraph3->setValue(4);
     bargraph4->setValue(5);
     bargraph5->setValue(4);
-
     bargraph6->setValue(4);
 
+    // Initialize the GameManager with power plants
+    // Note: Last added in factory is first in chain, so we add in reverse order
+    auto& gameManager = GameManager::getInstance();
+    
+    // Add Power Plant 1 (using display1, bargraph1, encoder1, display5, bargraph5)
+    gameManager.addPowerPlant(0, 1, 
+                             COAL_MIN_PRODUCTION_WATTS, COAL_MAX_PRODUCTION_WATTS,
+                             encoder1, display1, display5, bargraph1, bargraph5);
+    
+    // Add Power Plant 2 (using display2, bargraph2, encoder2, display6, bargraph6)
+    gameManager.addPowerPlant(1, 2,
+                             GAS_MIN_PRODUCTION_WATTS, GAS_MAX_PRODUCTION_WATTS,
+                             encoder2, display2, display6, bargraph2, bargraph6);
 }
+
 TaskHandle_t ioTaskHandle = nullptr;
 void ioTask(void*){
   for (;;){
+    // Update displays using GameManager
+    GameManager::updateDisplays();
 
-
-    display1->displayNumber(coalPowerSetting.load());
-    display2->displayNumber(gasPowerSetting.load());
-
-    bargraph1->setValue(static_cast<uint8_t>(coalPowerPercentage.load() * 10));
-    bargraph2->setValue(static_cast<uint8_t>(gasPowerPercentage.load() * 10));
-
-    if (espApi.isGameActive()) {
-        display5->displayNumber(coalCoefficient.load() * 100);
-        display6->displayNumber(gasCoefficient.load() * 100);
-        bargraph5->setValue(static_cast<uint8_t>(coalCoefficient.load() * 10));
-        bargraph6->setValue(static_cast<uint8_t>(gasCoefficient.load() * 10));
-    } else {
-        display5->displayNumber(0L);
-        display6->displayNumber(0L);
-        bargraph5->setValue(0);
-        bargraph6->setValue(0);
-    }
     factory.update();          // all the SPI/GPIO work
     vTaskDelay(1);             // 1 ms = 1 kHz; tune as you like
   }
 }
+
 void setup()
 {
     Serial.begin(115200);
@@ -285,28 +225,15 @@ void setup()
     pinMode(BUZZER_PIN, OUTPUT);
     digitalWrite(BUZZER_PIN, LOW);
 
-    /* ---------- Wi‑Fi & backend ---------- */
+    /* ---------- Wi‑Fi & ESP-API initialization ---------- */
     if (connectToWiFi()) {
-        Serial.println("[ESP-API] Initializing…");
-        espApi.setProductionCallback (getProductionValue);
-        Serial.println("[ESP-API] Registering callbacks…");
-        espApi.setConsumptionCallback(getConsumptionValue);
-        espApi.setPowerPlantsCallback(getConnectedPowerPlants);
-        espApi.setConsumersCallback  (getConnectedConsumers);
-
-        espApi.setUpdateInterval(500);
-        espApi.setPollInterval  (2000);
-        Serial.println("[ESP-API] Setting update intervals…");
-
-        if (espApi.login(API_USERNAME, API_PASSWORD) &&
-            espApi.registerBoard())
-        {
-            espApi.printStatus();
-        } else {
-            Serial.println("[ESP‑API] Login or registration failed");
-        }
+        Serial.println("[ESP-API] Initializing via GameManager…");
+        auto& gameManager = GameManager::getInstance();
+        gameManager.initEspApi(SERVER_URL, BOARD_NAME, API_USERNAME, API_PASSWORD);
+        Serial.println("[ESP-API] Setup done ✓");
+    } else {
+        Serial.println("[ESP-API] Skipped due to WiFi connection failure");
     }
-    Serial.println("[ESP-API] Setup done ✓");
     initPeripherals();
 
     Serial.println("Setup done ✓");
@@ -324,75 +251,21 @@ void setup()
 /*                                LOOP                                */
 /* ------------------------------------------------------------------ */
 
-void updateGame()
-{
-
-    coalPowerPercentage = encoder1->getValue()  / 1000.0f;
-    gasPowerPercentage  = encoder2->getValue()  / 1000.0f;
-    coalPowerSetting = (COAL_MIN_PRODUCTION_WATTS +
-                        (coalPowerPercentage) *
-                        (COAL_MAX_PRODUCTION_WATTS - COAL_MIN_PRODUCTION_WATTS)) * coalCoefficient;
-    gasPowerSetting  = (GAS_MIN_PRODUCTION_WATTS  +
-                        (gasPowerPercentage)  *
-                        (GAS_MAX_PRODUCTION_WATTS  - GAS_MIN_PRODUCTION_WATTS)) * gasCoefficient;
-    //Serial.printf("Coal Power Value: %d, Gas Power Value: %d\n", encoder1->getValue() , encoder2->getValue() );
-    const uint8_t value3 = encoder3->getValue();
-    const uint8_t value4 = encoder4->getValue();
-}
-
 void loop()
-{/*
-
-    if (millis() - lastUpdateTime >= 1000) {
-        lastUpdateTime = millis();
-        
-        display1->displayNumber(8878.0,1); // display seconds since last update
-        display2->displayNumber(8878.0,1);
-        display3->displayNumber(8878.0,1);
-        display4->displayNumber(8878.0,1);
-        display5->displayNumber(8878.0,1);
-        bargraph1->setValue(4);
-        bargraph2->setValue(5);
-        bargraph3->setValue(4);
-        bargraph4->setValue(5);
-        bargraph5->setValue(4);
-        Serial.printf("[Peripherals] Updated displays and bargraphs at %lu ms\n", millis());
-
-    }*/
-
-
-    if (WiFi.status() == WL_CONNECTED && espApi.update())
-        updateCoefficientsFromGame();
+{
+    if (WiFi.status() == WL_CONNECTED && GameManager::getInstance().updateEspApi())
+        GameManager::getInstance().updateCoefficientsFromGame();
 
     long now = millis();
-    updateGame(); // update displays, bargraphs, encoders, etc.
+    GameManager::getInstance().update(); // update game logic
     long elapsed = millis() - now;
 
-
     if (millis() - lastDebugTime >= POWER_PLANT_DEBUG_INTERVAL) {
+        auto& gameManager = GameManager::getInstance();
         Serial.printf("[PLANTS] Debug: %lu ms slong\n", elapsed);
         lastDebugTime = millis();
-        Serial.printf("[PLANTS] Coal %.0f%% → %.1fW (c=%.2f) | "
-                      "Gas %.0f%% → %.1fW (c=%.2f) | Game %s\n",
-                      coalPowerSetting.load(), coalPowerSetting.load(), coalCoefficient.load(),
-                      gasPowerSetting.load(),  gasPowerSetting.load(),  gasCoefficient.load(),
-                      espApi.isGameActive() ? "ON" : "OFF");
+        gameManager.printDebugInfo();
         // check how much heap is free
         Serial.printf("[PLANTS] Free heap: %lu bytes\n", ESP.getFreeHeap());
     }
-/*
-    if (Serial.available()) {
-        String cmd = Serial.readStringUntil('\n');
-        cmd.trim();
-        if (cmd == "scan")          WiFi.scanNetworks(true, true);
-        else if (cmd == "status")   Serial.printf("Wi‑Fi %s\n",
-                                    WiFi.status()==WL_CONNECTED?"OK":"DOWN");
-        else if (cmd == "reconnect")
-        {
-            WiFi.disconnect();
-            connectToWiFi();
-        }
-    }*/
-
-
 }
