@@ -22,25 +22,10 @@
 #define HYDRO_PLANT_ID    1005  // Hydro power plant physical ID (example)
 #define SOLAR_PLANT_ID    1006  // Solar power plant physical ID (example)
 
-// Power plant configuration - hardcoded min/max production values
-// These represent the actual power plant capacity ranges
-#define COAL_MIN_PRODUCTION_WATTS 0.0f      // Coal plant minimum output
-#define COAL_MAX_PRODUCTION_WATTS 500.0f    // Coal plant maximum output  
-#define GAS_MIN_PRODUCTION_WATTS 0.0f       // Gas plant minimum output
-#define GAS_MAX_PRODUCTION_WATTS 300.0f     // Gas plant maximum output
-
-// Example additional power plant capacities
-#define WIND_MIN_PRODUCTION_WATTS 0.0f      // Wind plant minimum output
-#define WIND_MAX_PRODUCTION_WATTS 400.0f    // Wind plant maximum output
-#define NUCLEAR_MIN_PRODUCTION_WATTS 100.0f // Nuclear plant minimum output
-#define NUCLEAR_MAX_PRODUCTION_WATTS 800.0f // Nuclear plant maximum output
-#define HYDRO_MIN_PRODUCTION_WATTS 0.0f     // Hydro plant minimum output
-#define HYDRO_MAX_PRODUCTION_WATTS 600.0f   // Hydro plant maximum output
-#define SOLAR_MIN_PRODUCTION_WATTS 0.0f     // Solar plant minimum output
-#define SOLAR_MAX_PRODUCTION_WATTS 350.0f   // Solar plant maximum output
-
-// Min/max power ranges are determined by the game scenario
-// Coefficients are updated in real-time from the game server
+// NOTE: Power plant min/max production values are now automatically 
+// retrieved from the game server via the production ranges API endpoint.
+// The GameManager will automatically update these values when the game
+// scenario changes or when new coefficients are received.
 
 // Update intervals (in milliseconds)
 #define DISPLAY_UPDATE_INTERVAL_MS   100  // How often to update displays

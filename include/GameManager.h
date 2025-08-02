@@ -5,6 +5,7 @@
 #include <vector>
 #include <array>
 #include <ESPGameAPI.h>
+#include <NFCBuildingRegistry.h>
 #include "power_plant_config.h"
 #include "PeripheralFactory.h"
 
@@ -23,31 +24,27 @@ struct PowerPlant {
     // Hardware references
     Encoder* encoder;
     SegmentDisplay* powerDisplay;
-    SegmentDisplay* coeffDisplay;
     Bargraph* powerBargraph;
-    Bargraph* coeffBargraph;
     
     // State variables
     std::atomic<float> powerSetting;
-    std::atomic<float> coefficient;
     std::atomic<float> powerPercentage;
+    std::atomic<float> frozenPercentage;  // Store value when frozen
     
     PowerPlant() : 
         plantId(0), sourceType(0), minWatts(0.0f), maxWatts(0.0f),
-        encoder(nullptr), powerDisplay(nullptr), coeffDisplay(nullptr),
-        powerBargraph(nullptr), coeffBargraph(nullptr),
-        powerSetting(0.0f), coefficient(1.0f), powerPercentage(0.0f) {}
+        encoder(nullptr), powerDisplay(nullptr), powerBargraph(nullptr),
+        powerSetting(0.0f), powerPercentage(0.0f), frozenPercentage(0.0f) {}
         
     // Copy constructor and assignment operator
     PowerPlant(const PowerPlant& other) :
         plantId(other.plantId), sourceType(other.sourceType), 
         minWatts(other.minWatts), maxWatts(other.maxWatts),
         encoder(other.encoder), powerDisplay(other.powerDisplay), 
-        coeffDisplay(other.coeffDisplay), powerBargraph(other.powerBargraph), 
-        coeffBargraph(other.coeffBargraph),
+        powerBargraph(other.powerBargraph),
         powerSetting(other.powerSetting.load()), 
-        coefficient(other.coefficient.load()), 
-        powerPercentage(other.powerPercentage.load()) {}
+        powerPercentage(other.powerPercentage.load()),
+        frozenPercentage(other.frozenPercentage.load()) {}
         
     PowerPlant& operator=(const PowerPlant& other) {
         if (this != &other) {
@@ -57,21 +54,18 @@ struct PowerPlant {
             maxWatts = other.maxWatts;
             encoder = other.encoder;
             powerDisplay = other.powerDisplay;
-            coeffDisplay = other.coeffDisplay;
             powerBargraph = other.powerBargraph;
-            coeffBargraph = other.coeffBargraph;
             powerSetting = other.powerSetting.load();
-            coefficient = other.coefficient.load();
             powerPercentage = other.powerPercentage.load();
+            frozenPercentage = other.frozenPercentage.load();
         }
         return *this;
     }
         
     PowerPlant(uint16_t id, uint8_t type, float min, float max) :
         plantId(id), sourceType(type), minWatts(min), maxWatts(max),
-        encoder(nullptr), powerDisplay(nullptr), coeffDisplay(nullptr),
-        powerBargraph(nullptr), coeffBargraph(nullptr),
-        powerSetting(0.0f), coefficient(1.0f), powerPercentage(0.0f) {}
+        encoder(nullptr), powerDisplay(nullptr), powerBargraph(nullptr),
+        powerSetting(0.0f), powerPercentage(0.0f), frozenPercentage(0.0f) {}
 };
 
 class GameManager {
@@ -85,11 +79,21 @@ private:
     
     // ESP-API instance (owned by GameManager)
     ESPGameAPI* espApi;
+    
+    // NFC Building Registry for consumption tracking
+    NFCBuildingRegistry* nfcRegistry;
+    
+    // Consumption tracking
+    std::atomic<float> totalConsumption;
+    unsigned long lastConsumptionUpdate;
 
     // Private constructor for singleton
     GameManager() :
         powerPlantCount(0),
-        espApi(nullptr) {
+        espApi(nullptr),
+        nfcRegistry(nullptr),
+        totalConsumption(0.0f),
+        lastConsumptionUpdate(0) {
         // Initialize power plants array
         for (auto& plant : powerPlants) {
             plant = PowerPlant();
@@ -107,9 +111,9 @@ public:
         
         // Set up callbacks
         espApi->setProductionCallback([this]() { return getTotalProduction(); });
-        espApi->setConsumptionCallback([]() { return 0.0f; });
+        espApi->setConsumptionCallback([this]() { return getTotalConsumption(); });
         espApi->setPowerPlantsCallback([this]() { return getConnectedPowerPlants(); });
-        espApi->setConsumersCallback([]() { return std::vector<ConnectedConsumer>{}; });
+        espApi->setConsumersCallback([this]() { return getConnectedConsumers(); });
         
         // Set intervals
         espApi->setUpdateInterval(500);
@@ -118,6 +122,10 @@ public:
         // Login and register
         if (espApi->login(username, password) && espApi->registerBoard()) {
             espApi->printStatus();
+            
+            // Request initial production ranges
+            Serial.println("[GameManager] Requesting initial production ranges...");
+            requestProductionRanges();
         } else {
             Serial.println("[GameManager] ESP-API login or registration failed");
         }
@@ -130,13 +138,66 @@ public:
         }
     }
     
-    // Update coefficients from game server
+    // Update coefficients and ranges from game server
     void updateCoefficientsFromGame() {
         if (!espApi) return;
         
-        for (const auto &c : espApi->getProductionCoefficients()) {
-            setCoefficient(c.source_id, c.coefficient);
+        // First, reset all power plants to (0,0) - disabled by default
+        for (size_t i = 0; i < powerPlantCount; i++) {
+            powerPlants[i].minWatts = 0.0f;
+            powerPlants[i].maxWatts = 0.0f;
         }
+        
+        // Update production ranges (these are now pre-multiplied by the server)
+        // Only power plants that receive ranges from server will be enabled
+        for (const auto &r : espApi->getProductionRanges()) {
+            for (size_t i = 0; i < powerPlantCount; i++) {
+                if (powerPlants[i].sourceType == r.source_id) {
+                    Serial.printf("🔄 Updated power plant %u ranges: %.1fW - %.1fW\n", 
+                                  powerPlants[i].plantId, r.min_power, r.max_power);
+                    powerPlants[i].minWatts = r.min_power;
+                    powerPlants[i].maxWatts = r.max_power;
+                    break; // Found the matching plant, no need to continue
+                }
+            }
+        }
+        
+        // Log any power plants that remain disabled (0,0)
+        for (size_t i = 0; i < powerPlantCount; i++) {
+            if (powerPlants[i].minWatts == 0.0f && powerPlants[i].maxWatts == 0.0f) {
+                Serial.printf("⚠️  Power plant %u (type %u) disabled - no ranges from server\n", 
+                              powerPlants[i].plantId, powerPlants[i].sourceType);
+            }
+        }
+    }
+    
+    // Update consumption from connected buildings
+    void updateConsumptionFromBuildings() {
+        if (!nfcRegistry || !espApi) return;
+        
+        float consumption = 0.0f;
+        
+        // Get consumption coefficients from server
+        const auto& consumptionCoeffs = espApi->getConsumptionCoefficients();
+        
+        // Get all connected buildings from NFC registry
+        auto connectedBuildings = nfcRegistry->getAllBuildings();
+        
+        // Calculate total consumption based on connected buildings
+        for (const auto& building : connectedBuildings) {
+            uint8_t buildingType = building.second.buildingType;
+            
+            // Find consumption for this building type
+            for (const auto& coeff : consumptionCoeffs) {
+                if (coeff.building_id == buildingType) {
+                    consumption += coeff.consumption;
+                    break;
+                }
+            }
+        }
+        
+        totalConsumption = consumption;
+        lastConsumptionUpdate = millis();
     }
     
     // Check if game is active
@@ -146,7 +207,28 @@ public:
     
     // Update ESP-API (call this in main loop)
     bool updateEspApi() {
-        return espApi ? espApi->update() : false;
+        bool result = espApi ? espApi->update() : false;
+        
+        // If coefficients were updated, also request production ranges
+        if (result && espApi) {
+            requestProductionRanges();
+        }
+        
+        return result;
+    }
+    
+    // Request production ranges from server
+    void requestProductionRanges() {
+        if (!espApi) return;
+        
+        espApi->getProductionRanges([this](bool success, const std::vector<ProductionRange>& ranges, const std::string& error) {
+            if (success) {
+                Serial.println("📊 Production ranges received from server");
+                updateCoefficientsFromGame(); // This will update both coefficients and ranges
+            } else {
+                Serial.println("❌ Failed to get production ranges: " + String(error.c_str()));
+            }
+        });
     }
 
     // Delete copy/move constructors and assignment operators
@@ -162,9 +244,9 @@ public:
     }
 
     // Add a new power plant (returns index or -1 if full)
-    int addPowerPlant(uint16_t plantId, uint8_t sourceType, float minWatts, float maxWatts,
-                      Encoder* encoder, SegmentDisplay* powerDisplay, SegmentDisplay* coeffDisplay,
-                      Bargraph* powerBargraph, Bargraph* coeffBargraph) {
+    // Min/max watts will be automatically set from server production ranges
+    int addPowerPlant(uint16_t plantId, uint8_t sourceType,
+                      Encoder* encoder, SegmentDisplay* powerDisplay, Bargraph* powerBargraph) {
         if (powerPlantCount >= MAX_POWER_PLANTS) {
             return -1; // Array is full
         }
@@ -172,16 +254,14 @@ public:
         auto& plant = powerPlants[powerPlantCount];
         plant.plantId = plantId;
         plant.sourceType = sourceType;
-        plant.minWatts = minWatts;
-        plant.maxWatts = maxWatts;
+        plant.minWatts = 0.0f;  // Will be updated from server
+        plant.maxWatts = 1000.0f;  // Default max, will be updated from server
         plant.encoder = encoder;
         plant.powerDisplay = powerDisplay;
-        plant.coeffDisplay = coeffDisplay;
         plant.powerBargraph = powerBargraph;
-        plant.coeffBargraph = coeffBargraph;
         plant.powerSetting = 0.0f;
-        plant.coefficient = 1.0f;
         plant.powerPercentage = 0.0f;
+        plant.frozenPercentage = 0.0f;
         
         // Set initial encoder value to 50%
         if (encoder) {
@@ -193,17 +273,24 @@ public:
 
     // Update game state from hardware
     void update() {
+        // Update power plants
+        nfcRegistry->scanForCards();
         for (size_t i = 0; i < powerPlantCount; i++) {
             auto& plant = powerPlants[i];
             if (!plant.encoder) continue;
 
             // Read encoder value and convert to percentage
-            plant.powerPercentage = plant.encoder->getValue() / 1000.0f;
+            float newPercentage = plant.encoder->getValue() / 1000.0f;
+            plant.powerPercentage = newPercentage;
 
-            // Calculate power setting based on plant capacity and coefficient
-            plant.powerSetting = (plant.minWatts +
-                                 (plant.powerPercentage.load()) *
-                                 (plant.maxWatts - plant.minWatts)) * plant.coefficient.load();
+            // Calculate power setting based on plant capacity (ranges are now pre-multiplied by server)
+            plant.powerSetting = plant.minWatts + 
+                                (plant.powerPercentage.load()) * (plant.maxWatts - plant.minWatts);
+        }
+        
+        // Update consumption every 2 seconds
+        if (millis() - lastConsumptionUpdate >= 2000) {
+            updateConsumptionFromBuildings();
         }
     }
 
@@ -215,8 +302,6 @@ public:
     // Update displays (private implementation)
 private:
     void updateDisplaysImpl() {
-        bool gameActive = isGameActive();
-        
         for (size_t i = 0; i < powerPlantCount; i++) {
             auto& plant = powerPlants[i];
             
@@ -224,25 +309,14 @@ private:
             if (plant.powerDisplay) {
                 plant.powerDisplay->displayNumber(plant.powerSetting.load());
             }
+            
+            // Update power bargraph based on encoder percentage
             if (plant.powerBargraph) {
-                plant.powerBargraph->setValue(static_cast<uint8_t>(plant.powerPercentage.load() * 10));
-            }
-
-            // Update coefficient displays
-            if (gameActive) {
-                if (plant.coeffDisplay) {
-                    plant.coeffDisplay->displayNumber(plant.coefficient.load() * 100);
-                }
-                if (plant.coeffBargraph) {
-                    plant.coeffBargraph->setValue(static_cast<uint8_t>(plant.coefficient.load() * 10));
-                }
-            } else {
-                if (plant.coeffDisplay) {
-                    plant.coeffDisplay->displayNumber(0L);
-                }
-                if (plant.coeffBargraph) {
-                    plant.coeffBargraph->setValue(0);
-                }
+                // Calculate bargraph value: 0% encoder = 0 LEDs, 100% encoder = 10 LEDs
+                // The hardware is inverted: setValue(0) = fully lit, setValue(10) = not lit
+                // So we invert: 0% → setValue(10), 100% → setValue(0)
+                uint8_t desiredLEDs = static_cast<uint8_t>(plant.powerPercentage.load() * 10);
+                plant.powerBargraph->setValue(desiredLEDs);
             }
         }
     }
@@ -250,15 +324,6 @@ private:
 public:
 
     // Setters for game coefficients (called from API callbacks)
-    void setCoefficient(uint16_t plantId, float coeff) {
-        for (size_t i = 0; i < powerPlantCount; i++) {
-            if (powerPlants[i].plantId == plantId) {
-                powerPlants[i].coefficient = coeff;
-                break;
-            }
-        }
-    }
-
     // Getters for specific plants by ID
     PowerPlant* getPowerPlant(uint16_t plantId) {
         for (size_t i = 0; i < powerPlantCount; i++) {
@@ -278,15 +343,6 @@ public:
         return 0.0f;
     }
 
-    float getCoefficientByPlantId(uint16_t plantId) const {
-        for (size_t i = 0; i < powerPlantCount; i++) {
-            if (powerPlants[i].plantId == plantId) {
-                return powerPlants[i].coefficient.load();
-            }
-        }
-        return 1.0f;
-    }
-
     float getPercentageByPlantId(uint16_t plantId) const {
         for (size_t i = 0; i < powerPlantCount; i++) {
             if (powerPlants[i].plantId == plantId) {
@@ -302,6 +358,17 @@ public:
             total += powerPlants[i].powerSetting.load();
         }
         return total;
+    }
+    
+    // Get total consumption from connected buildings
+    float getTotalConsumption() const {
+        return totalConsumption.load();
+    }
+    
+    // Initialize NFC Building Registry
+    void initNfcRegistry(NFCBuildingRegistry* registry) {
+        nfcRegistry = registry;
+        Serial.println("[GameManager] NFC Building Registry initialized");
     }
 
     // Get count of power plants
@@ -319,14 +386,24 @@ public:
     // Debug output
     void printDebugInfo() {
         bool gameActive = isGameActive();
-        Serial.printf("[PLANTS] Total: %.1fW | Game %s | Plants: %zu\n",
-                      getTotalProduction(), gameActive ? "ON" : "OFF", powerPlantCount);
+        Serial.printf("[PLANTS] Total: %.1fW | Consumption: %.1fW | Game %s | Plants: %zu\n",
+                      getTotalProduction(), getTotalConsumption(), gameActive ? "ON" : "OFF", powerPlantCount);
         
         for (size_t i = 0; i < powerPlantCount; i++) {
             const auto& plant = powerPlants[i];
-            Serial.printf("  [%zu] ID:%u %.0f%% → %.1fW (c=%.2f)\n",
+            Serial.printf("  [%zu] ID:%u %.0f%% → %.1fW (%.1f-%.1fW)\n",
                           i, plant.plantId, plant.powerPercentage.load() * 100,
-                          plant.powerSetting.load(), plant.coefficient.load());
+                          plant.powerSetting.load(), plant.minWatts, plant.maxWatts);
+        }
+        
+        // Print connected buildings info
+        if (nfcRegistry) {
+            auto buildings = nfcRegistry->getAllBuildings();
+            Serial.printf("[BUILDINGS] Connected: %zu\n", buildings.size());
+            for (const auto& building : buildings) {
+                Serial.printf("  UID:%s Type:%u\n", 
+                             building.second.uid.c_str(), building.second.buildingType);
+            }
         }
     }
 };

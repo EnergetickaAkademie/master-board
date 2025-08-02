@@ -6,6 +6,8 @@
 #include <WiFi.h>
 #include "PeripheralFactory.h"
 #include <SPI.h>
+#include <MFRC522.h>
+#include <NFCBuildingRegistry.h>
 
 #include "board_config.h"
 #include "power_plant_config.h"
@@ -36,12 +38,12 @@
 // #define ENCODER4_PIN_SW    9
 
 /* Unused pins for future expansion */
-// #define NFC_SCK_PIN       40
-// #define NFC_MISO_PIN      41
-// #define NFC_MOSI_PIN      39
-// #define NFC_RST_PIN       42
-// #define NFC_SS_PIN         5
-// #define COMPROT_PIN       19
+#define NFC_SCK_PIN       40
+#define NFC_MISO_PIN      41
+#define NFC_MOSI_PIN      39
+#define NFC_RST_PIN       42
+#define NFC_SS_PIN         21
+#define COMPROT_PIN       19
 
 /* ------------------------------------------------------------------ */
 /*                    GLOBAL STATE & FORWARD DECLS                    */
@@ -61,6 +63,15 @@ SegmentDisplay  *display1  = nullptr, *display2  = nullptr,
                 *display3  = nullptr, *display4  = nullptr,
                 *display5  = nullptr, *display6  = nullptr;
 Encoder         *encoder1  = nullptr, *encoder2  = nullptr;
+
+
+MFRC522 mfrc522(NFC_SS_PIN, NFC_RST_PIN);
+NFCBuildingRegistry nfcRegistry(&mfrc522);
+
+/* ------------------------------------------------------------------ */
+/*                           NFC CONNECTION TEST                      */
+/* ------------------------------------------------------------------ */
+
 
 /* ------------------------------------------------------------------ */
 /*                        WIFI CONNECTION                             */
@@ -154,10 +165,10 @@ bool connectToWiFi()
 void initPeripherals()
 {
     /* ---------- Peripherals ---------- */
-    encoder1 = factory.createEncoder(ENCODER1_PIN_A, ENCODER1_PIN_B,
+    encoder1 = factory.createEncoder(ENCODER1_PIN_B, ENCODER1_PIN_A,
                                      ENCODER1_PIN_SW, 0, 1000, 1);
     Serial.println("[Peripherals] Encoder 1 created");
-    encoder2 = factory.createEncoder(ENCODER2_PIN_A, ENCODER2_PIN_B,
+    encoder2 = factory.createEncoder(ENCODER2_PIN_B, ENCODER2_PIN_A,
                                      ENCODER2_PIN_SW, 0, 1000, 1);
     Serial.println("[Peripherals] Encoder 2 created");
     encoder1->setValue(500);  // 50%
@@ -195,15 +206,11 @@ void initPeripherals()
     // Note: Last added in factory is first in chain, so we add in reverse order
     auto& gameManager = GameManager::getInstance();
     
-    // Add Power Plant 1 (using display1, bargraph1, encoder1, display5, bargraph5)
-    gameManager.addPowerPlant(0, 1, 
-                             COAL_MIN_PRODUCTION_WATTS, COAL_MAX_PRODUCTION_WATTS,
-                             encoder1, display1, display5, bargraph1, bargraph5);
+    // Add Power Plant 1 (Coal) - using display1, bargraph1, encoder1
+    gameManager.addPowerPlant(0, SOURCE_COAL, encoder1, display1, bargraph1);
     
-    // Add Power Plant 2 (using display2, bargraph2, encoder2, display6, bargraph6)
-    gameManager.addPowerPlant(1, 2,
-                             GAS_MIN_PRODUCTION_WATTS, GAS_MAX_PRODUCTION_WATTS,
-                             encoder2, display2, display6, bargraph2, bargraph6);
+    // Add Power Plant 2 (Gas) - using display2, bargraph2, encoder2  
+    gameManager.addPowerPlant(1, SOURCE_GAS, encoder2, display2, bargraph2);
 }
 
 TaskHandle_t ioTaskHandle = nullptr;
@@ -220,7 +227,7 @@ void ioTask(void*){
 void setup()
 {
     Serial.begin(115200);
-    Serial.println("\nMaster Board ESP32‑S3 booting…");
+    Serial.println("\nMaster Board ESP32-S3 booting…");
 
     pinMode(BUZZER_PIN, OUTPUT);
     digitalWrite(BUZZER_PIN, LOW);
@@ -235,6 +242,21 @@ void setup()
         Serial.println("[ESP-API] Skipped due to WiFi connection failure");
     }
     initPeripherals();
+
+    /* ---------- NFC Testing & Initialization ---------- */
+    Serial.println("\n🔧 Testing NFC hardware...");
+    SPI.begin(NFC_SCK_PIN, NFC_MISO_PIN, NFC_MOSI_PIN, NFC_SS_PIN);
+    mfrc522.PCD_Init();
+    Serial.printf("[NFC] Using pins: SCK=%d, MISO=%d, MOSI=%d, SS=%d, RST=%d\n",
+                  NFC_SCK_PIN, NFC_MISO_PIN, NFC_MOSI_PIN, NFC_SS_PIN, NFC_RST_PIN);
+                    
+  // Initialize MFRC522
+    mfrc522.PCD_DumpVersionToSerial();
+  
+    
+
+    auto& gameManager = GameManager::getInstance();
+    gameManager.initNfcRegistry(&nfcRegistry);
 
     Serial.println("Setup done ✓");
     xTaskCreatePinnedToCore(
@@ -255,6 +277,16 @@ void loop()
 {
     if (WiFi.status() == WL_CONNECTED && GameManager::getInstance().updateEspApi())
         GameManager::getInstance().updateCoefficientsFromGame();
+    
+    // NFC scanning with basic status
+    static unsigned long lastNfcScan = 0;
+    if (millis() - lastNfcScan >= 100) {  // Scan every 100ms
+        bool cardFound = nfcRegistry.scanForCards();
+        if (cardFound) {
+            Serial.println("📱 [NFC] Card detected and processed!");
+        }
+        lastNfcScan = millis();
+    }
 
     long now = millis();
     GameManager::getInstance().update(); // update game logic
@@ -265,7 +297,13 @@ void loop()
         Serial.printf("[PLANTS] Debug: %lu ms slong\n", elapsed);
         lastDebugTime = millis();
         gameManager.printDebugInfo();
-        // check how much heap is free
-        Serial.printf("[PLANTS] Free heap: %lu bytes\n", ESP.getFreeHeap());
+        bool selfTestResult = mfrc522.PCD_PerformSelfTest();
+        if (selfTestResult) {
+            Serial.println("✅ PASSED");
+        } else {
+            Serial.println("❌ FAILED - Hardware may be faulty");
+        }
+
+
     }
 }
