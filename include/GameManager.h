@@ -153,8 +153,8 @@ public:
         for (const auto &r : espApi->getProductionRanges()) {
             for (size_t i = 0; i < powerPlantCount; i++) {
                 if (powerPlants[i].sourceType == r.source_id) {
-                    Serial.printf("🔄 Updated power plant %u ranges: %.1fW - %.1fW\n", 
-                                  powerPlants[i].plantId, r.min_power, r.max_power);
+                    /*Serial.printf("🔄 Updated power plant %u ranges: %.1fW - %.1fW\n", 
+                                  powerPlants[i].plantId, r.min_power, r.max_power);*/
                     powerPlants[i].minWatts = r.min_power;
                     powerPlants[i].maxWatts = r.max_power;
                     break; // Found the matching plant, no need to continue
@@ -165,8 +165,8 @@ public:
         // Log any power plants that remain disabled (0,0)
         for (size_t i = 0; i < powerPlantCount; i++) {
             if (powerPlants[i].minWatts == 0.0f && powerPlants[i].maxWatts == 0.0f) {
-                Serial.printf("⚠️  Power plant %u (type %u) disabled - no ranges from server\n", 
-                              powerPlants[i].plantId, powerPlants[i].sourceType);
+                /*Serial.printf("⚠️  Power plant %u (type %u) disabled - no ranges from server\n", 
+                              powerPlants[i].plantId, powerPlants[i].sourceType);*/
             }
         }
     }

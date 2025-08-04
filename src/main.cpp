@@ -8,6 +8,7 @@
 #include <SPI.h>
 #include <MFRC522.h>
 #include <NFCBuildingRegistry.h>
+#include <com-prot.h>
 
 #include "board_config.h"
 #include "power_plant_config.h"
@@ -46,6 +47,12 @@
 #define COMPROT_PIN       19
 
 /* ------------------------------------------------------------------ */
+/*                        COM-PROT CONFIGURATION                      */
+/* ------------------------------------------------------------------ */
+// Create master instance - Master ID 1, pin 19 (COMPROT_PIN)
+ComProtMaster master(1, COMPROT_PIN);
+
+/* ------------------------------------------------------------------ */
 /*                    GLOBAL STATE & FORWARD DECLS                    */
 /* ------------------------------------------------------------------ */
 // Game state is now managed by GameManager singleton
@@ -69,8 +76,74 @@ MFRC522 mfrc522(NFC_SS_PIN, NFC_RST_PIN);
 NFCBuildingRegistry nfcRegistry(&mfrc522);
 
 /* ------------------------------------------------------------------ */
+/*                      COM-PROT INTERRUPT HANDLER                    */
+/* ------------------------------------------------------------------ */
+// This ISR is called on a rising edge on the COM-PROT pin.
+// It immediately calls receive() to handle the incoming message.
+// NOTE: The receive() function must be safe to call from an ISR.
+void IRAM_ATTR onComProtRise() {
+    master.receive();
+}
+
+/* ------------------------------------------------------------------ */
+/*                           COM-PROT TASK                            */
+/* ------------------------------------------------------------------ */
+TaskHandle_t comProtTaskHandle = nullptr;
+
+void comProtTask(void* pvParameters) {
+    unsigned long lastDebugTime = 0;
+    Serial.println("[COM-PROT Task] Running on core " + String(xPortGetCoreID()));
+
+    for (;;) {
+        master.update();
+
+        if (millis() - lastDebugTime >= POWER_PLANT_DEBUG_INTERVAL) {
+            auto allSlaves = master.getConnectedSlaves();
+            Serial.printf("[COM-PROT] Active power plants: %d\n", allSlaves.size());
+            
+            for (const auto& slave : allSlaves) {
+                Serial.printf("[COM-PROT]   Power Plant ID=%d, Type=%d\n", slave.id, slave.type);
+            }
+            
+            // Example: Send LED toggle command to type 1 slaves every debug cycle
+            if (master.getSlavesByType(1).size() > 0) {
+                uint8_t ledState = (millis() / 10000) % 2; // Toggle every 10 seconds
+                master.sendCommandToSlaveType(1, 0x10, &ledState, 1);
+                Serial.printf("[COM-PROT] Sent LED command (state=%d) to type 1 power plants\n", ledState);
+            }
+            lastDebugTime = millis();
+        }
+        // master.receive(); // This is now handled by the ISR
+        taskYIELD(); // Yield to other tasks, allows for very high update rate
+    }
+}
+
+
+/* ------------------------------------------------------------------ */
 /*                           NFC CONNECTION TEST                      */
 /* ------------------------------------------------------------------ */
+
+
+/* ------------------------------------------------------------------ */
+/*                        COM-PROT DEBUG HANDLER                      */
+/* ------------------------------------------------------------------ */
+
+// Debug receive handler - called for every received message
+void debugReceiveHandler(uint8_t* payload, uint16_t length, uint8_t senderId, uint8_t messageType) {
+    // Only log non-heartbeat messages to avoid spam
+    if (messageType != 0x03) { // Skip heartbeat messages
+        Serial.printf("[COM-PROT] RX from slave %d: type=0x%02X, len=%d\n", senderId, messageType, length);
+    }
+    
+    // Log heartbeat messages with less detail
+    if (messageType == 0x03) {
+        static unsigned long lastHeartbeatLog = 0;
+        if (millis() - lastHeartbeatLog > 5000) { // Log every 5 seconds
+            Serial.printf("[COM-PROT] Heartbeats active from %d slaves\n", master.getSlaveCount());
+            lastHeartbeatLog = millis();
+        }
+    }
+}
 
 
 /* ------------------------------------------------------------------ */
@@ -201,7 +274,6 @@ void initPeripherals()
     bargraph4->setValue(5);
     bargraph5->setValue(4);
     bargraph6->setValue(4);
-
     // Initialize the GameManager with power plants
     // Note: Last added in factory is first in chain, so we add in reverse order
     auto& gameManager = GameManager::getInstance();
@@ -211,6 +283,7 @@ void initPeripherals()
     
     // Add Power Plant 2 (Gas) - using display2, bargraph2, encoder2  
     gameManager.addPowerPlant(1, SOURCE_GAS, encoder2, display2, bargraph2);
+
 }
 
 TaskHandle_t ioTaskHandle = nullptr;
@@ -218,8 +291,11 @@ void ioTask(void*){
   for (;;){
     // Update displays using GameManager
     GameManager::updateDisplays();
+        // master.receive(); // This is now handled by the ISR
 
     factory.update();          // all the SPI/GPIO work
+    // master.receive(); // This is now handled by the ISR
+
     vTaskDelay(1);             // 1 ms = 1 kHz; tune as you like
   }
 }
@@ -229,7 +305,7 @@ void setup()
     Serial.begin(115200);
     Serial.println("\nMaster Board ESP32-S3 booting…");
 
-    pinMode(BUZZER_PIN, OUTPUT);
+    /*pinMode(BUZZER_PIN, OUTPUT);
     digitalWrite(BUZZER_PIN, LOW);
 
     /* ---------- Wi‑Fi & ESP-API initialization ---------- */
@@ -243,7 +319,7 @@ void setup()
     }
     initPeripherals();
 
-    /* ---------- NFC Testing & Initialization ---------- */
+    // ---------- NFC Testing & Initialization ----------
     Serial.println("\n🔧 Testing NFC hardware...");
     SPI.begin(NFC_SCK_PIN, NFC_MISO_PIN, NFC_MOSI_PIN, NFC_SS_PIN);
     mfrc522.PCD_Init();
@@ -258,15 +334,44 @@ void setup()
     auto& gameManager = GameManager::getInstance();
     gameManager.initNfcRegistry(&nfcRegistry);
 
+    /* ---------- COM-PROT Master Initialization ---------- 
+    Serial.println("\n🔧 Initializing COM-PROT Master...");*/
+    
+    // Set debug receive handler
+    master.setDebugReceiveHandler(debugReceiveHandler);
+    
+    // Initialize the master
+    master.begin();
+
+    // Attach interrupt for COM-PROT pin
+    pinMode(COMPROT_PIN, INPUT);
+    attachInterrupt(digitalPinToInterrupt(COMPROT_PIN), onComProtRise, RISING);
+
+    // Create ComProt task on core 0
+    /*xTaskCreatePinnedToCore(
+        comProtTask,          // Task function
+        "ComProt",            // Task name
+        4096,                 // Stack size
+        nullptr,              // Task parameters
+        2,                    // Priority
+        &comProtTaskHandle,   // Task handle
+        1                     // Core ID
+    );*/
+
+    // Increase priority of the loop task
+    
+    Serial.printf("[COM-PROT] Master initialized on pin %d\n", COMPROT_PIN);
+    Serial.println("[COM-PROT] Ready to discover power plants...");
+
     Serial.println("Setup done ✓");
     xTaskCreatePinnedToCore(
       ioTask,                 // task function
       "IO",                   // name
       4096,                   // stack bytes
       nullptr,                // param
-      3,                      // priority (higher than default=1)
+      1,                      // priority (higher than default=1)
       &ioTaskHandle,
-      1);    
+      1);  
 }
 
 /* ------------------------------------------------------------------ */
@@ -278,8 +383,10 @@ void loop()
     if (WiFi.status() == WL_CONNECTED && GameManager::getInstance().updateEspApi())
         GameManager::getInstance().updateCoefficientsFromGame();
     
+    // COM-PROT logic is now in its own task (comProtTask)
+    
     // NFC scanning with basic status
-    static unsigned long lastNfcScan = 0;
+    /*tatic unsigned long lastNfcScan = 0;
     if (millis() - lastNfcScan >= 100) {  // Scan every 100ms
         bool cardFound = nfcRegistry.scanForCards();
         if (cardFound) {
@@ -288,21 +395,35 @@ void loop()
         lastNfcScan = millis();
     }
 
-    long now = millis();
+    long now = millis();*/
     GameManager::getInstance().update(); // update game logic
-    long elapsed = millis() - now;
+        
+
+    //long elapsed = millis() - now;
+    
+    //master.update();
 
     if (millis() - lastDebugTime >= POWER_PLANT_DEBUG_INTERVAL) {
-        auto& gameManager = GameManager::getInstance();
-        Serial.printf("[PLANTS] Debug: %lu ms slong\n", elapsed);
-        lastDebugTime = millis();
-        gameManager.printDebugInfo();
-        bool selfTestResult = mfrc522.PCD_PerformSelfTest();
-        if (selfTestResult) {
-            Serial.println("✅ PASSED");
-        } else {
-            Serial.println("❌ FAILED - Hardware may be faulty");
+        // master.receive(); // This is now handled by the ISR
+        auto allSlaves = master.getConnectedSlaves();
+        Serial.printf("[COM-PROT] Active power plants: %d\n", allSlaves.size());
+        // master.receive(); // This is now handled by the ISR
+
+        for (const auto& slave : allSlaves) {
+            Serial.printf("[COM-PROT]   Power Plant ID=%d, Type=%d\n", slave.id, slave.type);
         }
+        
+        // Example: Send LED toggle command to type 1 slaves every debug cycle
+        if (master.getSlavesByType(1).size() > 0) {
+            uint8_t ledState = (millis() / 10000) % 2; // Toggle every 10 seconds
+            master.sendCommandToSlaveType(1, 0x10, &ledState, 1);
+            Serial.printf("[COM-PROT] Sent LED command (state=%d) to type 1 power plants\n", ledState);
+        }
+        lastDebugTime = millis();
+
+
+        // list nfc cards aka consumers
+        GameManager::getInstance().printDebugInfo();
 
 
     }
