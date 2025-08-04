@@ -11,7 +11,7 @@
 // Note: BOARD_GENERIC is defined in ESPGameAPI.h as enum BoardType
 
 // API Server configuration  
-#define SERVER_URL "http://192.168.50.201"
+//#define SERVER_URL "http://192.168.50.201"
 #define API_USERNAME "board1"
 #define API_PASSWORD "board123"
 

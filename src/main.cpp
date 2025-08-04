@@ -4,6 +4,8 @@
  ******************************************************************************/
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
+#include <WiFiClient.h>
 #include "PeripheralFactory.h"
 #include <SPI.h>
 #include <MFRC522.h>
@@ -47,11 +49,152 @@
 #define COMPROT_PIN       19
 
 /* ------------------------------------------------------------------ */
+/*                     SERVER IP DISCOVERY                            */
+/* ------------------------------------------------------------------ */
+// MACs to search for
+static const uint8_t SERVER_MAC_1[6] = {0x74,0x3A,0xF4,0x10,0xD5,0x7E};
+static const uint8_t SERVER_MAC_2[6] = {0x00,0xD8,0x61,0x31,0x29,0xC5};
+
+WiFiUDP udp;
+
+// Find HTTP server by connecting and then checking if we can find the expected MAC
+// Note: Since low-level ARP table access is not reliably available in Arduino framework,
+// we'll use a simplified approach that just finds HTTP servers
+IPAddress findHttpServer()
+{
+    IPAddress myIp   = WiFi.localIP();
+    IPAddress mask   = WiFi.subnetMask();
+
+    WiFiClient client;
+
+    Serial.printf("[Server Discovery] Scanning network %s with mask %s\n", 
+                  myIp.toString().c_str(), mask.toString().c_str());
+    Serial.printf("[Server Discovery] Looking for HTTP servers with known MACs:\n");
+    Serial.printf("   MAC 1: %02X:%02X:%02X:%02X:%02X:%02X\n", 
+                 SERVER_MAC_1[0], SERVER_MAC_1[1], SERVER_MAC_1[2], 
+                 SERVER_MAC_1[3], SERVER_MAC_1[4], SERVER_MAC_1[5]);
+    Serial.printf("   MAC 2: %02X:%02X:%02X:%02X:%02X:%02X\n", 
+                 SERVER_MAC_2[0], SERVER_MAC_2[1], SERVER_MAC_2[2], 
+                 SERVER_MAC_2[3], SERVER_MAC_2[4], SERVER_MAC_2[5]);
+
+    // Calculate subnet base address using proper octet handling
+    uint8_t subnet[4] = { (uint8_t)(myIp[0] & mask[0]),
+                          (uint8_t)(myIp[1] & mask[1]),
+                          (uint8_t)(myIp[2] & mask[2]),
+                          0 };
+
+    Serial.printf("[Server Discovery] Subnet base: %d.%d.%d.0\n", subnet[0], subnet[1], subnet[2]);
+
+    uint32_t hostsScanned = 0;
+    
+    // First try common server IPs
+    uint8_t commonHosts[] = {2, 6, 210, 11, 100, 106, 106, 101, 106,200, 201, 4, 5, 7, 8, 9, 10, 12, 13, 14, 15, 3,106,106,106};
+    for (uint8_t host : commonHosts) {
+        IPAddress target(subnet[0], subnet[1], subnet[2], host);
+        if (target == myIp) continue;
+
+        hostsScanned++;
+        Serial.printf("[Server Discovery] Testing common host %s...", target.toString().c_str());
+        
+
+        if (client.connect(target, 80, 600)) {   // 150 ms timeout
+            client.stop();                       // handshake OK
+            Serial.println(" ✓ HTTP server found!");
+            return target;
+        }
+        Serial.println(" ✗");
+    }
+    
+    // If no common hosts work, try full scan
+    Serial.println("[Server Discovery] No common hosts found, trying full scan...");
+    
+    for (uint16_t host = 2; host < 255; ++host)
+    {
+        // Skip our own address and already-tested common hosts
+        if (host == myIp[3]) continue;
+        
+        bool alreadyTested = false;
+        for (uint8_t commonHost : commonHosts) {
+            if (host == commonHost) {
+                alreadyTested = true;
+                break;
+            }
+        }
+        if (alreadyTested) continue;
+
+        IPAddress target(subnet[0], subnet[1], subnet[2], host);
+
+        hostsScanned++;
+        if (hostsScanned % 50 == 0) {
+            Serial.printf("[Server Discovery] Scanned %lu hosts...\n", hostsScanned);
+        }
+        // testing mac address
+        if (client.connect(target, 80, 150) && (client.localIP() == target)) {   // 150 ms timeout
+            client.stop();                       // handshake OK
+            Serial.printf("✅ HTTP server found at %s\n", target.toString().c_str());
+            return target;
+        }else{
+            Serial.printf("✗ %s and mac %02X:%02X:%02X:%02X:%02X:%02X\n", 
+                          target.toString().c_str(),
+                          client.localIP()[0], client.localIP()[1], 
+                          client.localIP()[2], client.localIP()[3],
+                          client.localIP()[4], client.localIP()[5]);
+        }
+    }
+    
+    Serial.printf("[Server Discovery] Scanned %lu hosts total, no HTTP server found\n", hostsScanned);
+    return IPAddress();          // 0.0.0.0 = not found
+}
+
+// UDP broadcast discovery (fallback method)
+IPAddress findServerByBroadcast()
+{
+    const char* DISCOVERY_MSG = "DISCOVER-POWERPLANT";
+    const int DISCOVERY_PORT = 80;
+    const int LISTEN_PORT = 80;
+    
+    Serial.println("[Server Discovery] Trying UDP broadcast discovery...");
+    
+    if (!udp.begin(LISTEN_PORT)) {
+        Serial.println("[Server Discovery] Failed to start UDP");
+        return INADDR_NONE;
+    }
+    
+    // Send broadcast
+    IPAddress broadcastIP = WiFi.localIP();
+    broadcastIP[3] = 255; // Assume /24 network
+    
+    udp.beginPacket(broadcastIP, DISCOVERY_PORT);
+    udp.write((const uint8_t*)DISCOVERY_MSG, strlen(DISCOVERY_MSG));
+    udp.endPacket();
+    
+    Serial.printf("[Server Discovery] Sent broadcast to %s:%d\n", broadcastIP.toString().c_str(), DISCOVERY_PORT);
+    
+    // Wait for response
+    unsigned long startTime = millis();
+    while (millis() - startTime < 3000) { // 3 second timeout
+        int packetSize = udp.parsePacket();
+        if (packetSize) {
+            IPAddress serverIP = udp.remoteIP();
+            udp.stop();
+            Serial.printf("[Server Discovery] Server responded from %s\n", ("http://" + serverIP.toString()).c_str());
+            return serverIP;
+        }
+        delay(100);
+    }
+    
+    udp.stop();
+    Serial.println("[Server Discovery] No UDP response received");
+    return INADDR_NONE;
+}
+
+/* ------------------------------------------------------------------ */
 /*                        COM-PROT CONFIGURATION                      */
 /* ------------------------------------------------------------------ */
 // Create master instance - Master ID 1, pin 19 (COMPROT_PIN)
+/*
 ComProtMaster master(1, COMPROT_PIN);
-
+*/
 /* ------------------------------------------------------------------ */
 /*                    GLOBAL STATE & FORWARD DECLS                    */
 /* ------------------------------------------------------------------ */
@@ -81,15 +224,17 @@ NFCBuildingRegistry nfcRegistry(&mfrc522);
 // This ISR is called on a rising edge on the COM-PROT pin.
 // It immediately calls receive() to handle the incoming message.
 // NOTE: The receive() function must be safe to call from an ISR.
+/*
 void IRAM_ATTR onComProtRise() {
     master.receive();
-}
+
+}*/
 
 /* ------------------------------------------------------------------ */
 /*                           COM-PROT TASK                            */
 /* ------------------------------------------------------------------ */
 TaskHandle_t comProtTaskHandle = nullptr;
-
+/*
 void comProtTask(void* pvParameters) {
     unsigned long lastDebugTime = 0;
     Serial.println("[COM-PROT Task] Running on core " + String(xPortGetCoreID()));
@@ -116,7 +261,7 @@ void comProtTask(void* pvParameters) {
         // master.receive(); // This is now handled by the ISR
         taskYIELD(); // Yield to other tasks, allows for very high update rate
     }
-}
+}*/
 
 
 /* ------------------------------------------------------------------ */
@@ -129,6 +274,7 @@ void comProtTask(void* pvParameters) {
 /* ------------------------------------------------------------------ */
 
 // Debug receive handler - called for every received message
+/*
 void debugReceiveHandler(uint8_t* payload, uint16_t length, uint8_t senderId, uint8_t messageType) {
     // Only log non-heartbeat messages to avoid spam
     if (messageType != 0x03) { // Skip heartbeat messages
@@ -144,7 +290,7 @@ void debugReceiveHandler(uint8_t* payload, uint16_t length, uint8_t senderId, ui
         }
     }
 }
-
+*/
 
 /* ------------------------------------------------------------------ */
 /*                        WIFI CONNECTION                             */
@@ -181,8 +327,10 @@ void printWiFiStatusCode(wl_status_t status) {
 
 bool connectToWiFi()
 {
-    const char* ssid = "PotkaniNora";
-    const char* password = "PrimaryPapikTarget";
+    //const char* ssid = "PotkaniNora";
+    //const char* password = "PrimaryPapikTarget";
+    const char* ssid = "Bagr";
+    const char* password = "bagroviste";
     const int max_connection_attempts = 10;
 
     WiFi.mode(WIFI_STA);
@@ -221,6 +369,10 @@ bool connectToWiFi()
     
     if (WiFi.status() == WL_CONNECTED) {
         Serial.println("✅ WiFi connected successfully!");
+        Serial.printf("📶 Connected to: %s\n", ssid);
+        Serial.printf("🌐 IP Address: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("🔗 Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
+        Serial.printf("🎭 Subnet Mask: %s\n", WiFi.subnetMask().toString().c_str());
         return true;
     } else {
         Serial.println("❌ WiFi connection failed!");
@@ -310,10 +462,31 @@ void setup()
 
     /* ---------- Wi‑Fi & ESP-API initialization ---------- */
     if (connectToWiFi()) {
-        Serial.println("[ESP-API] Initializing via GameManager…");
-        auto& gameManager = GameManager::getInstance();
-        gameManager.initEspApi(SERVER_URL, BOARD_NAME, API_USERNAME, API_PASSWORD);
-        Serial.println("[ESP-API] Setup done ✓");
+        Serial.println("\n🔍 Discovering server...");
+        
+        // Try MAC-based HTTP server discovery first (most reliable)
+        IPAddress serverIp = findHttpServer();
+        
+        // If MAC discovery fails, try UDP broadcast discovery as fallback
+        if (!serverIp) {
+            Serial.println("[Server Discovery] MAC discovery failed, trying UDP broadcast discovery...");
+            serverIp = findServerByBroadcast();
+        }
+        
+        if (serverIp) {
+            Serial.printf("🎯 Server discovered at: %s\n", serverIp.toString().c_str());
+            
+            Serial.println("[ESP-API] Initializing via GameManager…");
+            auto& gameManager = GameManager::getInstance();
+            gameManager.initEspApi(("http://" + serverIp.toString()).c_str(), BOARD_NAME, API_USERNAME, API_PASSWORD);
+            Serial.println("[ESP-API] Setup done ✓");
+        } else {
+            Serial.println("⚠️  Server not found on local network");
+            Serial.println("[ESP-API] Using fallback server URL from config…");
+            auto& gameManager = GameManager::getInstance();
+            gameManager.initEspApi("http://192.168.50.201", BOARD_NAME, API_USERNAME, API_PASSWORD);
+            Serial.println("[ESP-API] Setup done with fallback URL ✓");
+        }
     } else {
         Serial.println("[ESP-API] Skipped due to WiFi connection failure");
     }
@@ -338,14 +511,14 @@ void setup()
     Serial.println("\n🔧 Initializing COM-PROT Master...");*/
     
     // Set debug receive handler
-    master.setDebugReceiveHandler(debugReceiveHandler);
+    //master.setDebugReceiveHandler(debugReceiveHandler);
     
     // Initialize the master
-    master.begin();
+    //master.begin();
 
     // Attach interrupt for COM-PROT pin
-    pinMode(COMPROT_PIN, INPUT);
-    attachInterrupt(digitalPinToInterrupt(COMPROT_PIN), onComProtRise, RISING);
+    //pinMode(COMPROT_PIN, INPUT);
+    //attachInterrupt(digitalPinToInterrupt(COMPROT_PIN), onComProtRise, RISING);
 
     // Create ComProt task on core 0
     /*xTaskCreatePinnedToCore(
@@ -402,23 +575,25 @@ void loop()
     //long elapsed = millis() - now;
     
     //master.update();
+    //master.update();
 
     if (millis() - lastDebugTime >= POWER_PLANT_DEBUG_INTERVAL) {
         // master.receive(); // This is now handled by the ISR
-        auto allSlaves = master.getConnectedSlaves();
+        /*auto allSlaves = master.getConnectedSlaves();
         Serial.printf("[COM-PROT] Active power plants: %d\n", allSlaves.size());
         // master.receive(); // This is now handled by the ISR
 
         for (const auto& slave : allSlaves) {
             Serial.printf("[COM-PROT]   Power Plant ID=%d, Type=%d\n", slave.id, slave.type);
         }
-        
+                    uint8_t ledState = (millis() / 10000) % 2; // Toggle every 10 seconds
+
+        master.sendCommandToSlaveType(1, 0x10, &ledState, 1);
         // Example: Send LED toggle command to type 1 slaves every debug cycle
         if (master.getSlavesByType(1).size() > 0) {
-            uint8_t ledState = (millis() / 10000) % 2; // Toggle every 10 seconds
-            master.sendCommandToSlaveType(1, 0x10, &ledState, 1);
+            
             Serial.printf("[COM-PROT] Sent LED command (state=%d) to type 1 power plants\n", ledState);
-        }
+        }*/
         lastDebugTime = millis();
 
 
