@@ -34,12 +34,12 @@
 #define ENCODER2_PIN_SW   12
 
 /* Future power plant encoders - pins reserved but not currently used */
-// #define ENCODER3_PIN_A    13
-// #define ENCODER3_PIN_B    14
-// #define ENCODER3_PIN_SW   15
-// #define ENCODER4_PIN_A     7
-// #define ENCODER4_PIN_B     8
-// #define ENCODER4_PIN_SW    9
+#define ENCODER3_PIN_A    13
+#define ENCODER3_PIN_B    14
+#define ENCODER3_PIN_SW   15
+#define ENCODER4_PIN_A     7
+#define ENCODER4_PIN_B     8
+#define ENCODER4_PIN_SW    9
 
 /* Unused pins for future expansion */
 #define NFC_SCK_PIN       40
@@ -204,11 +204,7 @@ ComProtMaster master(1, COMPROT_PIN);
 /* ------------------------------------------------------------------ */
 /*                    UART COMMUNICATION PROTOCOL                     */
 /* ------------------------------------------------------------------ */
-// UART protocol structures
-struct UartSlaveInfo {
-    uint8_t slaveType;
-    uint8_t amount;
-};
+// UART protocol structures - UartSlaveInfo is defined in GameManager.h
 
 struct AttractionCommand {
     uint8_t slaveType;
@@ -218,8 +214,6 @@ struct AttractionCommand {
 // UART communication variables
 HardwareSerial uartComm(1); // Use UART1
 unsigned long lastUartReceive = 0;
-unsigned long lastAttractionCommand = 0;
-bool attractionState = false;
 
 // Storage for connected slaves from retranslation station
 std::vector<UartSlaveInfo> connectedSlaves;
@@ -245,7 +239,8 @@ Bargraph        *bargraph1 = nullptr, *bargraph2 = nullptr,
 SegmentDisplay  *display1  = nullptr, *display2  = nullptr,
                 *display3  = nullptr, *display4  = nullptr,
                 *display5  = nullptr, *display6  = nullptr;
-Encoder         *encoder1  = nullptr, *encoder2  = nullptr;
+Encoder         *encoder1  = nullptr, *encoder2  = nullptr,
+                *encoder3  = nullptr, *encoder4  = nullptr;
 
 
 MFRC522 mfrc522(NFC_SS_PIN, NFC_RST_PIN);
@@ -442,6 +437,9 @@ void parseSlaveInfo(uint8_t* data, size_t length) {
         
         Serial.printf("[UART] Slave Type %u: %u connected\n", slave.slaveType, slave.amount);
     }
+    
+    // Update GameManager with new powerplant information
+    GameManager::getInstance().updateUartPowerplants(connectedSlaves);
 }
 
 void processUartData() {
@@ -472,22 +470,6 @@ void sendAttractionCommand(uint8_t slaveType, uint8_t state) {
                   slaveType, state ? "ON" : "OFF");
 }
 
-void handleAttractionCommands() {
-    // Send attraction command every 10 seconds (alternating ON/OFF)
-    if (millis() - lastAttractionCommand >= 10000) {
-        attractionState = !attractionState;
-        
-        // Send command to all known slave types
-        for (const auto& slave : connectedSlaves) {
-            if (slave.amount > 0) {
-                sendAttractionCommand(slave.slaveType, attractionState ? 1 : 0);
-            }
-        }
-        
-        lastAttractionCommand = millis();
-    }
-}
-
 /* ------------------------------------------------------------------ */
 /*                               SETUP                                */
 /* ------------------------------------------------------------------ */
@@ -500,9 +482,16 @@ void initPeripherals()
     Serial.println("[Peripherals] Encoder 1 created");
     encoder2 = factory.createEncoder(ENCODER2_PIN_B, ENCODER2_PIN_A,
                                      ENCODER2_PIN_SW, 0, 1000, 1);
+    encoder3 = factory.createEncoder(ENCODER3_PIN_B, ENCODER3_PIN_A,
+                                     ENCODER3_PIN_SW, 0, 1000, 1);
+    encoder4 = factory.createEncoder(ENCODER4_PIN_B, ENCODER4_PIN_A,
+                                        ENCODER4_PIN_SW, 0, 1000, 1);
+    Serial.println("[Peripherals] Encoder 3 created");
     Serial.println("[Peripherals] Encoder 2 created");
     encoder1->setValue(500);  // 50%
     encoder2->setValue(500);  // 50%
+    encoder3->setValue(500);  // 50%
+    encoder4->setValue(500);  // 50%
     Serial.println("[Peripherals] Encoders initialized");
 
     shiftChain = factory.createShiftRegisterChain(LATCH_PIN, DATA_PIN, CLOCK_PIN);
@@ -531,15 +520,24 @@ void initPeripherals()
     bargraph4->setValue(5);
     bargraph5->setValue(4);
     bargraph6->setValue(4);
-    // Initialize the GameManager with power plants
-    // Note: Last added in factory is first in chain, so we add in reverse order
+    // Initialize the GameManager with power plant type controls
+    // This registers what types we can control, actual counts come from UART
     auto& gameManager = GameManager::getInstance();
     
-    // Add Power Plant 1 (Coal) - using display1, bargraph1, encoder1
-    gameManager.addPowerPlant(0, SOURCE_COAL, encoder1, display1, bargraph1);
+    // Register Coal control (encoder1, display1, bargraph1)
+    gameManager.registerPowerPlantTypeControl(COAL, encoder1, display1, bargraph1);
     
-    // Add Power Plant 2 (Gas) - using display2, bargraph2, encoder2  
-    gameManager.addPowerPlant(1, SOURCE_GAS, encoder2, display2, bargraph2);
+    // Register Gas control (encoder2, display2, bargraph2)
+    gameManager.registerPowerPlantTypeControl(GAS, encoder2, display2, bargraph2);
+
+    gameManager.registerPowerPlantTypeControl(NUCLEAR, encoder3, display3, bargraph3);
+
+
+    gameManager.registerPowerPlantTypeControl(HYDRO, encoder4, display6, bargraph6);
+
+    gameManager.registerPowerPlantTypeControl(WIND, nullptr, display4, bargraph4);
+
+    gameManager.registerPowerPlantTypeControl(PHOTOVOLTAIC, nullptr, display5, bargraph5);
 
 }
 
@@ -681,7 +679,6 @@ void loop()
     
     // UART Communication processing
     processUartData();
-    handleAttractionCommands();
         
 
     //long elapsed = millis() - now;

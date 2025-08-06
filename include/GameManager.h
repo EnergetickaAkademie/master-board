@@ -14,10 +14,29 @@ class Encoder;
 class SegmentDisplay;
 class Bargraph;
 
-// Power plant data structure
+// Power plant type enumeration
+enum PowerPlantType : uint8_t {
+    PHOTOVOLTAIC = 1,
+    WIND = 2,
+    NUCLEAR = 3,
+    GAS = 4,
+    HYDRO = 5,
+    HYDRO_STORAGE = 6,
+    COAL = 7,
+    BATTERY = 8
+};
+
+// UART Powerplant info structure (from UART protocol)
+struct UartSlaveInfo {
+    uint8_t slaveType;
+    uint8_t amount;
+};
+
+// Power plant type controller data structure
+// This represents a local controller (encoder + display) for a power plant type
+// The actual number of powerplants is tracked via UART
 struct PowerPlant {
-    uint16_t plantId;           // Physical plant ID for API
-    uint8_t sourceType;         // Source type (coal, gas, etc.)
+    PowerPlantType plantType;   // Power plant type (enum)
     float minWatts;             // Minimum production capacity
     float maxWatts;             // Maximum production capacity
     
@@ -32,13 +51,13 @@ struct PowerPlant {
     std::atomic<float> frozenPercentage;  // Store value when frozen
     
     PowerPlant() : 
-        plantId(0), sourceType(0), minWatts(0.0f), maxWatts(0.0f),
+        plantType(COAL), minWatts(0.0f), maxWatts(0.0f),
         encoder(nullptr), powerDisplay(nullptr), powerBargraph(nullptr),
         powerSetting(0.0f), powerPercentage(0.0f), frozenPercentage(0.0f) {}
         
     // Copy constructor and assignment operator
     PowerPlant(const PowerPlant& other) :
-        plantId(other.plantId), sourceType(other.sourceType), 
+        plantType(other.plantType), 
         minWatts(other.minWatts), maxWatts(other.maxWatts),
         encoder(other.encoder), powerDisplay(other.powerDisplay), 
         powerBargraph(other.powerBargraph),
@@ -48,8 +67,7 @@ struct PowerPlant {
         
     PowerPlant& operator=(const PowerPlant& other) {
         if (this != &other) {
-            plantId = other.plantId;
-            sourceType = other.sourceType;
+            plantType = other.plantType;
             minWatts = other.minWatts;
             maxWatts = other.maxWatts;
             encoder = other.encoder;
@@ -62,18 +80,19 @@ struct PowerPlant {
         return *this;
     }
         
-    PowerPlant(uint16_t id, uint8_t type, float min, float max) :
-        plantId(id), sourceType(type), minWatts(min), maxWatts(max),
+    PowerPlant(PowerPlantType type, float min, float max) :
+        plantType(type), minWatts(min), maxWatts(max),
         encoder(nullptr), powerDisplay(nullptr), powerBargraph(nullptr),
         powerSetting(0.0f), powerPercentage(0.0f), frozenPercentage(0.0f) {}
 };
 
 class GameManager {
 private:
-    // Maximum number of power plants supported
+    // Maximum number of power plant types we can control locally
     static constexpr size_t MAX_POWER_PLANTS = 6;
     
-    // Array of power plants
+    // Array of local power plant type controllers (encoder + display)
+    // The actual count of powerplants comes from UART
     std::array<PowerPlant, MAX_POWER_PLANTS> powerPlants;
     size_t powerPlantCount;
     
@@ -82,6 +101,10 @@ private:
     
     // NFC Building Registry for consumption tracking
     NFCBuildingRegistry* nfcRegistry;
+    
+    // UART Powerplant tracking
+    std::vector<UartSlaveInfo> uartPowerplants;
+    unsigned long lastUartAttractionUpdate;
     
     // Consumption tracking
     std::atomic<float> totalConsumption;
@@ -92,6 +115,7 @@ private:
         powerPlantCount(0),
         espApi(nullptr),
         nfcRegistry(nullptr),
+        lastUartAttractionUpdate(0),
         totalConsumption(0.0f),
         lastConsumptionUpdate(0) {
         // Initialize power plants array
@@ -152,9 +176,9 @@ public:
         // Only power plants that receive ranges from server will be enabled
         for (const auto &r : espApi->getProductionRanges()) {
             for (size_t i = 0; i < powerPlantCount; i++) {
-                if (powerPlants[i].sourceType == r.source_id) {
-                    /*Serial.printf("🔄 Updated power plant %u ranges: %.1fW - %.1fW\n", 
-                                  powerPlants[i].plantId, r.min_power, r.max_power);*/
+                if (static_cast<uint8_t>(powerPlants[i].plantType) == r.source_id) {
+                    /*Serial.printf("🔄 Updated power plant type %u ranges: %.1fW - %.1fW\n", 
+                                  static_cast<uint8_t>(powerPlants[i].plantType), r.min_power, r.max_power);*/
                     powerPlants[i].minWatts = r.min_power;
                     powerPlants[i].maxWatts = r.max_power;
                     break; // Found the matching plant, no need to continue
@@ -165,8 +189,8 @@ public:
         // Log any power plants that remain disabled (0,0)
         for (size_t i = 0; i < powerPlantCount; i++) {
             if (powerPlants[i].minWatts == 0.0f && powerPlants[i].maxWatts == 0.0f) {
-                /*Serial.printf("⚠️  Power plant %u (type %u) disabled - no ranges from server\n", 
-                              powerPlants[i].plantId, powerPlants[i].sourceType);*/
+                /*Serial.printf("⚠️  Power plant type %u disabled - no ranges from server\n", 
+                              static_cast<uint8_t>(powerPlants[i].plantType));*/
             }
         }
     }
@@ -243,29 +267,33 @@ public:
         return instance;
     }
 
-    // Add a new power plant (returns index or -1 if full)
-    // Min/max watts will be automatically set from server production ranges
-    int addPowerPlant(uint16_t plantId, uint8_t sourceType,
-                      Encoder* encoder, SegmentDisplay* powerDisplay, Bargraph* powerBargraph) {
+    // Register a power plant type for local control (encoder + display)
+    // This doesn't add actual power plants - those are tracked via UART
+    // Returns index or -1 if full
+    int registerPowerPlantTypeControl(PowerPlantType plantType,
+                                      Encoder* encoder, SegmentDisplay* powerDisplay, Bargraph* powerBargraph) {
         if (powerPlantCount >= MAX_POWER_PLANTS) {
             return -1; // Array is full
         }
         
         auto& plant = powerPlants[powerPlantCount];
-        plant.plantId = plantId;
-        plant.sourceType = sourceType;
+        plant.plantType = plantType;
         plant.minWatts = 0.0f;  // Will be updated from server
         plant.maxWatts = 1000.0f;  // Default max, will be updated from server
         plant.encoder = encoder;
         plant.powerDisplay = powerDisplay;
         plant.powerBargraph = powerBargraph;
         plant.powerSetting = 0.0f;
-        plant.powerPercentage = 0.0f;
-        plant.frozenPercentage = 0.0f;
         
-        // Set initial encoder value to 50%
         if (encoder) {
+            // Regulable source: set initial encoder value to 50%
+            plant.powerPercentage = 0.5f;
+            plant.frozenPercentage = 0.5f;
             encoder->setValue(500); // 50% of 1000
+        } else {
+            // Unregulable source: always at 100%
+            plant.powerPercentage = 1.0f;
+            plant.frozenPercentage = 1.0f;
         }
         
         return powerPlantCount++;
@@ -277,11 +305,15 @@ public:
         nfcRegistry->scanForCards();
         for (size_t i = 0; i < powerPlantCount; i++) {
             auto& plant = powerPlants[i];
-            if (!plant.encoder) continue;
-
-            // Read encoder value and convert to percentage
-            float newPercentage = plant.encoder->getValue() / 1000.0f;
-            plant.powerPercentage = newPercentage;
+            
+            if (plant.encoder) {
+                // Regulable source: read encoder value and convert to percentage
+                float newPercentage = plant.encoder->getValue() / 1000.0f;
+                plant.powerPercentage = newPercentage;
+            } else {
+                // Unregulable source: always run at maximum power (100%)
+                plant.powerPercentage = 1.0f;
+            }
 
             // Calculate power setting based on plant capacity (ranges are now pre-multiplied by server)
             plant.powerSetting = plant.minWatts + 
@@ -292,6 +324,9 @@ public:
         if (millis() - lastConsumptionUpdate >= 2000) {
             updateConsumptionFromBuildings();
         }
+        
+        // Update attraction states based on power percentages
+        updateAttractionStates();
     }
 
     // Method for IO task to update displays
@@ -305,9 +340,12 @@ private:
         for (size_t i = 0; i < powerPlantCount; i++) {
             auto& plant = powerPlants[i];
             
-            // Update power displays
+            // Calculate total power for this type including UART powerplants
+            float totalPowerForType = calculateTotalPowerForType(static_cast<uint8_t>(plant.plantType));
+            
+            // Update power displays with total power (including count)
             if (plant.powerDisplay) {
-                plant.powerDisplay->displayNumber(plant.powerSetting.load());
+                plant.powerDisplay->displayNumber(totalPowerForType);
             }
             
             // Update power bargraph based on encoder percentage
@@ -324,28 +362,28 @@ private:
 public:
 
     // Setters for game coefficients (called from API callbacks)
-    // Getters for specific plants by ID
-    PowerPlant* getPowerPlant(uint16_t plantId) {
+    // Getters for specific plants by type
+    PowerPlant* getPowerPlantByType(PowerPlantType plantType) {
         for (size_t i = 0; i < powerPlantCount; i++) {
-            if (powerPlants[i].plantId == plantId) {
+            if (powerPlants[i].plantType == plantType) {
                 return &powerPlants[i];
             }
         }
         return nullptr;
     }
 
-    float getPowerByPlantId(uint16_t plantId) const {
+    float getPowerByPlantType(PowerPlantType plantType) const {
         for (size_t i = 0; i < powerPlantCount; i++) {
-            if (powerPlants[i].plantId == plantId) {
+            if (powerPlants[i].plantType == plantType) {
                 return powerPlants[i].powerSetting.load();
             }
         }
         return 0.0f;
     }
 
-    float getPercentageByPlantId(uint16_t plantId) const {
+    float getPercentageByPlantType(PowerPlantType plantType) const {
         for (size_t i = 0; i < powerPlantCount; i++) {
-            if (powerPlants[i].plantId == plantId) {
+            if (powerPlants[i].plantType == plantType) {
                 return powerPlants[i].powerPercentage.load();
             }
         }
@@ -354,9 +392,12 @@ public:
 
     float getTotalProduction() const {
         float total = 0.0f;
-        for (size_t i = 0; i < powerPlantCount; i++) {
-            total += powerPlants[i].powerSetting.load();
+        
+        // Add power from all UART powerplant types
+        for (const auto& uartPlant : uartPowerplants) {
+            total += calculateTotalPowerForType(uartPlant.slaveType);
         }
+        
         return total;
     }
     
@@ -382,18 +423,58 @@ public:
     // ESP-API callback helpers
     std::vector<ConnectedPowerPlant> getConnectedPowerPlants();
     std::vector<ConnectedConsumer> getConnectedConsumers();
+    
+    // UART Powerplant management
+    void updateUartPowerplants(const std::vector<UartSlaveInfo>& powerplants);
+    void updateAttractionStates();
+    float calculateTotalPowerForType(uint8_t slaveType) const;
 
     // Debug output
     void printDebugInfo() {
         bool gameActive = isGameActive();
-        Serial.printf("[PLANTS] Total: %.1fW | Consumption: %.1fW | Game %s | Plants: %zu\n",
-                      getTotalProduction(), getTotalConsumption(), gameActive ? "ON" : "OFF", powerPlantCount);
+        Serial.printf("[PLANTS] Total: %.1fW | Consumption: %.1fW | Game %s | Local: %zu | UART Types: %zu\n",
+                      getTotalProduction(), getTotalConsumption(), gameActive ? "ON" : "OFF", 
+                      powerPlantCount, uartPowerplants.size());
         
+        // Print local encoder-controlled power plant types
         for (size_t i = 0; i < powerPlantCount; i++) {
             const auto& plant = powerPlants[i];
-            Serial.printf("  [%zu] ID:%u %.0f%% → %.1fW (%.1f-%.1fW)\n",
-                          i, plant.plantId, plant.powerPercentage.load() * 100,
-                          plant.powerSetting.load(), plant.minWatts, plant.maxWatts);
+            float totalForType = calculateTotalPowerForType(static_cast<uint8_t>(plant.plantType));
+            
+            // Find UART count for this type
+            uint8_t uartCount = 0;
+            for (const auto& uartPlant : uartPowerplants) {
+                if (uartPlant.slaveType == static_cast<uint8_t>(plant.plantType)) {
+                    uartCount = uartPlant.amount;
+                    break;
+                }
+            }
+            
+            float powerPerPlant = 0.0f;
+            if (uartCount > 0 && plant.maxWatts > plant.minWatts) {
+                powerPerPlant = plant.minWatts + (plant.powerPercentage.load()) * (plant.maxWatts - plant.minWatts);
+            }
+            
+            Serial.printf("  [%zu] Type:%u %.0f%% → %.1fW×%u = %.1fW (%.1f-%.1fW)\n",
+                          i, static_cast<uint8_t>(plant.plantType), plant.powerPercentage.load() * 100,
+                          powerPerPlant, uartCount, totalForType,
+                          plant.minWatts, plant.maxWatts);
+        }
+        
+        // Print UART powerplants without local control
+        for (const auto& uartPlant : uartPowerplants) {
+            bool hasLocalControl = false;
+            for (size_t i = 0; i < powerPlantCount; i++) {
+                if (static_cast<uint8_t>(powerPlants[i].plantType) == uartPlant.slaveType) {
+                    hasLocalControl = true;
+                    break;
+                }
+            }
+            
+            if (!hasLocalControl && uartPlant.amount > 0) {
+                Serial.printf("  [UART] Type:%u Count:%u (No local control)\n",
+                             uartPlant.slaveType, uartPlant.amount);
+            }
         }
         
         // Print connected buildings info
