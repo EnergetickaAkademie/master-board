@@ -6,6 +6,7 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <WiFiClient.h>
+#include <vector>
 #include "PeripheralFactory.h"
 #include <SPI.h>
 #include <MFRC522.h>
@@ -47,6 +48,10 @@
 #define NFC_RST_PIN       42
 #define NFC_SS_PIN         21
 #define COMPROT_PIN       19
+
+/* UART Communication with Retranslation Station */
+#define UART_RX_PIN       19
+#define UART_TX_PIN       47
 
 /* ------------------------------------------------------------------ */
 /*                     SERVER IP DISCOVERY                            */
@@ -195,6 +200,34 @@ IPAddress findServerByBroadcast()
 /*
 ComProtMaster master(1, COMPROT_PIN);
 */
+
+/* ------------------------------------------------------------------ */
+/*                    UART COMMUNICATION PROTOCOL                     */
+/* ------------------------------------------------------------------ */
+// UART protocol structures
+struct UartSlaveInfo {
+    uint8_t slaveType;
+    uint8_t amount;
+};
+
+struct AttractionCommand {
+    uint8_t slaveType;
+    uint8_t state; // 0 = OFF, 1 = ON
+};
+
+// UART communication variables
+HardwareSerial uartComm(1); // Use UART1
+unsigned long lastUartReceive = 0;
+unsigned long lastAttractionCommand = 0;
+bool attractionState = false;
+
+// Storage for connected slaves from retranslation station
+std::vector<UartSlaveInfo> connectedSlaves;
+
+// Function prototypes
+void processUartData();
+void sendAttractionCommand(uint8_t slaveType, uint8_t state);
+void parseSlaveInfo(uint8_t* data, size_t length);
 /* ------------------------------------------------------------------ */
 /*                    GLOBAL STATE & FORWARD DECLS                    */
 /* ------------------------------------------------------------------ */
@@ -327,10 +360,10 @@ void printWiFiStatusCode(wl_status_t status) {
 
 bool connectToWiFi()
 {
-    //const char* ssid = "PotkaniNora";
-    //const char* password = "PrimaryPapikTarget";
-    const char* ssid = "Bagr";
-    const char* password = "bagroviste";
+    const char* ssid = "PotkaniNora";
+    const char* password = "PrimaryPapikTarget";
+    //const char* ssid = "Bagr";
+    //const char* password = "bagroviste";
     const int max_connection_attempts = 10;
 
     WiFi.mode(WIFI_STA);
@@ -380,6 +413,78 @@ bool connectToWiFi()
         printWiFiStatusCode(WiFi.status());
         Serial.println();
         return false;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/*                    UART COMMUNICATION FUNCTIONS                    */
+/* ------------------------------------------------------------------ */
+
+void initUartCommunication() {
+    // Initialize UART1 with 9600 baud rate on pins 19 (RX) and 47 (TX)
+    uartComm.begin(9600, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
+    Serial.println("[UART] Communication initialized on pins RX=19, TX=47, baud=9600");
+}
+
+void parseSlaveInfo(uint8_t* data, size_t length) {
+    if (length % 2 != 0) {
+        Serial.println("[UART] Invalid slave info length");
+        return;
+    }
+    
+    connectedSlaves.clear();
+    
+    for (size_t i = 0; i < length; i += 2) {
+        UartSlaveInfo slave;
+        slave.slaveType = data[i];
+        slave.amount = data[i + 1];
+        connectedSlaves.push_back(slave);
+        
+        Serial.printf("[UART] Slave Type %u: %u connected\n", slave.slaveType, slave.amount);
+    }
+}
+
+void processUartData() {
+    if (uartComm.available()) {
+        // Read all available data
+        uint8_t buffer[64];
+        size_t bytesRead = 0;
+        
+        while (uartComm.available() && bytesRead < sizeof(buffer)) {
+            buffer[bytesRead++] = uartComm.read();
+        }
+        
+        if (bytesRead > 0) {
+            parseSlaveInfo(buffer, bytesRead);
+            lastUartReceive = millis();
+        }
+    }
+}
+
+void sendAttractionCommand(uint8_t slaveType, uint8_t state) {
+    AttractionCommand cmd;
+    cmd.slaveType = slaveType;
+    cmd.state = state;
+    
+    uartComm.write((uint8_t*)&cmd, sizeof(cmd));
+    
+    Serial.printf("[UART] Sent attraction command: Type=%u, State=%s\n", 
+                  slaveType, state ? "ON" : "OFF");
+}
+
+void handleAttractionCommands() {
+    // Send attraction command every 10 seconds (alternating ON/OFF)
+    if (millis() - lastAttractionCommand >= 10000) {
+        attractionState = !attractionState;
+        
+        // Send command to all known slave types
+        for (const auto& slave : connectedSlaves) {
+            if (slave.amount > 0) {
+                sendAttractionCommand(slave.slaveType, attractionState ? 1 : 0);
+            }
+        }
+        
+        lastAttractionCommand = millis();
     }
 }
 
@@ -491,6 +596,9 @@ void setup()
         Serial.println("[ESP-API] Skipped due to WiFi connection failure");
     }
     initPeripherals();
+    
+    // ---------- UART Communication Initialization ----------
+    initUartCommunication();
 
     // ---------- NFC Testing & Initialization ----------
     Serial.println("\n🔧 Testing NFC hardware...");
@@ -570,6 +678,10 @@ void loop()
 
     long now = millis();*/
     GameManager::getInstance().update(); // update game logic
+    
+    // UART Communication processing
+    processUartData();
+    handleAttractionCommands();
         
 
     //long elapsed = millis() - now;
