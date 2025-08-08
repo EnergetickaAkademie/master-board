@@ -55,8 +55,13 @@ void GameManager::updateAttractionStates() {
         bool found = false;
         for (size_t i = 0; i < powerPlantCount; i++) {
             if (static_cast<uint8_t>(powerPlants[i].plantType) == uartPlant.slaveType) {
-                float percentage = powerPlants[i].powerPercentage.load();
-                uint8_t attractionState = (percentage > 0.5f) ? 1 : 0;
+                const auto& plant = powerPlants[i];
+                uint8_t attractionState = 0; // Default off
+                
+                // Only turn on attraction if powerplant is enabled (max power > 0) and percentage > 50%
+                if (plant.maxWatts > 0.0f && plant.powerPercentage.load() > 0.5f) {
+                    attractionState = 1;
+                }
                 
                 // Send attraction command (this will be called from main.cpp)
                 extern void sendAttractionCommand(uint8_t slaveType, uint8_t state);
@@ -86,8 +91,8 @@ float GameManager::calculateTotalPowerForType(uint8_t slaveType) const {
             // Find the count of UART powerplants of this type
             for (const auto& uartPlant : uartPowerplants) {
                 if (uartPlant.slaveType == slaveType) {
-                    // If no powerplants connected, return 0
-                    if (uartPlant.amount == 0) {
+                    // If no powerplants connected or powerplant type disabled (max = 0), return 0
+                    if (uartPlant.amount == 0 || plant.maxWatts <= 0.0f) {
                         return 0.0f;
                     }
                     

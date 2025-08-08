@@ -533,7 +533,7 @@ void initPeripherals()
     gameManager.registerPowerPlantTypeControl(NUCLEAR, encoder3, display3, bargraph3);
 
 
-    gameManager.registerPowerPlantTypeControl(HYDRO, encoder4, display6, bargraph6);
+    gameManager.registerPowerPlantTypeControl(HYDRO, encoder4, display4, bargraph6);
 
     gameManager.registerPowerPlantTypeControl(WIND, nullptr, display4, bargraph4);
 

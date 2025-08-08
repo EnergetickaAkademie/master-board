@@ -350,10 +350,18 @@ private:
             
             // Update power bargraph based on encoder percentage
             if (plant.powerBargraph) {
-                // Calculate bargraph value: 0% encoder = 0 LEDs, 100% encoder = 10 LEDs
-                // The hardware is inverted: setValue(0) = fully lit, setValue(10) = not lit
-                // So we invert: 0% → setValue(10), 100% → setValue(0)
-                uint8_t desiredLEDs = static_cast<uint8_t>(plant.powerPercentage.load() * 10);
+                uint8_t desiredLEDs;
+                
+                // If powerplant type is disabled (max power = 0), show 0 bars
+                if (plant.maxWatts <= 0.0f) {
+                    desiredLEDs = 10; // Hardware inverted: 10 = no LEDs lit
+                } else {
+                    // Calculate bargraph value: 0% encoder = 0 LEDs, 100% encoder = 10 LEDs
+                    // The hardware is inverted: setValue(0) = fully lit, setValue(10) = not lit
+                    // So we invert: 0% → setValue(10), 100% → setValue(0)
+                    desiredLEDs = static_cast<uint8_t>(plant.powerPercentage.load() * 10);
+                }
+                
                 plant.powerBargraph->setValue(desiredLEDs);
             }
         }
@@ -451,14 +459,23 @@ public:
             }
             
             float powerPerPlant = 0.0f;
-            if (uartCount > 0 && plant.maxWatts > plant.minWatts) {
+            const char* status = "DISABLED";
+            
+            if (plant.maxWatts <= 0.0f) {
+                status = "DISABLED";
+                powerPerPlant = 0.0f;
+            } else if (uartCount == 0) {
+                status = "NO PLANTS";
+                powerPerPlant = 0.0f;
+            } else {
+                status = "ACTIVE";
                 powerPerPlant = plant.minWatts + (plant.powerPercentage.load()) * (plant.maxWatts - plant.minWatts);
             }
             
-            Serial.printf("  [%zu] Type:%u %.0f%% → %.1fW×%u = %.1fW (%.1f-%.1fW)\n",
+            Serial.printf("  [%zu] Type:%u %.0f%% → %.1fW×%u = %.1fW (%.1f-%.1fW) %s\n",
                           i, static_cast<uint8_t>(plant.plantType), plant.powerPercentage.load() * 100,
                           powerPerPlant, uartCount, totalForType,
-                          plant.minWatts, plant.maxWatts);
+                          plant.minWatts, plant.maxWatts, status);
         }
         
         // Print UART powerplants without local control
