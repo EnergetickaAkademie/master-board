@@ -90,6 +90,7 @@ class GameManager {
 private:
     // Maximum number of power plant types we can control locally
     static constexpr size_t MAX_POWER_PLANTS = 6;
+    static constexpr unsigned long ATTRACTION_UPDATE_MS = 300; // Update UART attraction states every 300ms
     
     // Array of local power plant type controllers (encoder + display)
     // The actual count of powerplants comes from UART
@@ -315,9 +316,8 @@ public:
                 plant.powerPercentage = 1.0f;
             }
 
-            // Calculate power setting based on plant capacity (ranges are now pre-multiplied by server)
-            plant.powerSetting = plant.minWatts + 
-                                (plant.powerPercentage.load()) * (plant.maxWatts - plant.minWatts);
+            // Calculate power setting using helper with center snap
+            plant.powerSetting = computePowerPerPlant(plant);
         }
         
         // Update consumption every 2 seconds
@@ -436,9 +436,22 @@ public:
     void updateUartPowerplants(const std::vector<UartSlaveInfo>& powerplants);
     void updateAttractionStates();
     float calculateTotalPowerForType(uint8_t slaveType) const;
+    // Compute power per plant with center snap for symmetric ranges
+    float computePowerPerPlant(const PowerPlant& plant) const;
 
-    // Debug output
-    void printDebugInfo() {
+private:
+    // Per-type periodic update hooks (called from updateAttractionStates)
+    void updatePhotovoltaic(uint8_t slaveType, const PowerPlant& plant);
+    void updateWind(uint8_t slaveType, const PowerPlant& plant);
+    void updateNuclear(uint8_t slaveType, const PowerPlant& plant);
+    void updateGas(uint8_t slaveType, const PowerPlant& plant);
+    void updateHydro(uint8_t slaveType, const PowerPlant& plant);
+    void updateHydroStorage(uint8_t slaveType, const PowerPlant& plant);
+    void updateCoal(uint8_t slaveType, const PowerPlant& plant);
+    void updateBattery(uint8_t slaveType, const PowerPlant& plant);
+
+    // Debug output (instance implementation)
+    void printDebugInfoImpl() {
         bool gameActive = isGameActive();
         Serial.printf("[PLANTS] Total: %.1fW | Consumption: %.1fW | Game %s | Local: %zu | UART Types: %zu\n",
                       getTotalProduction(), getTotalConsumption(), gameActive ? "ON" : "OFF", 
@@ -469,7 +482,7 @@ public:
                 powerPerPlant = 0.0f;
             } else {
                 status = "ACTIVE";
-                powerPerPlant = plant.minWatts + (plant.powerPercentage.load()) * (plant.maxWatts - plant.minWatts);
+                powerPerPlant = computePowerPerPlant(plant);
             }
             
             Serial.printf("  [%zu] Type:%u %.0f%% → %.1fW×%u = %.1fW (%.1f-%.1fW) %s\n",
@@ -503,6 +516,12 @@ public:
                              building.second.uid.c_str(), building.second.buildingType);
             }
         }
+    }
+
+public:
+    // Public static debug print that avoids exposing instance state externally
+    static void printDebugInfo() {
+        getInstance().printDebugInfoImpl();
     }
 };
 
