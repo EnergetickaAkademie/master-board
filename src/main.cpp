@@ -576,7 +576,7 @@ void initPeripherals()
 
     // Periodic attraction updates (decoupled from UART slave info arrival)
     // Runs every 300 ms to push on/off / battery state updates regularly
-    factory.createPeriodic(300, []()
+    factory.createPeriodic(1000, []()
                            { GameManager::getInstance().updateAttractionStates(); });
 }
 
@@ -722,11 +722,11 @@ void loop()
     // Ensure GameManager receives UART powerplant info periodically,
     // not only when new UART data is parsed, so attraction logic is responsive
     static unsigned long lastUartPushTime = 0;
-    if (millis() - lastUartPushTime >= 300)
+    /*if (millis() - lastUartPushTime >= 300)
     {
         GameManager::getInstance().updateUartPowerplants(connectedSlaves);
         lastUartPushTime = millis();
-    }
+    }*/
 
     // long elapsed = millis() - now;
 

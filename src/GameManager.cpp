@@ -39,7 +39,6 @@ void GameManager::updateUartPowerplants(const std::vector<UartSlaveInfo>& powerp
     uartPowerplants = powerplants;
     
     // Update attraction states when powerplant info changes
-    updateAttractionStates();
 }
 
 void GameManager::updateAttractionStates() {
@@ -91,32 +90,6 @@ void GameManager::updateAttractionStates() {
         if (sentCount < sizeof(sentTypes)) sentTypes[sentCount++] = uartPlant.slaveType;
     }
 
-    // For locally controlled types not present in UART list yet, still push state
-    /*for (size_t i = 0; i < powerPlantCount; i++) {
-        const auto& plant = powerPlants[i];
-        uint8_t typeId = static_cast<uint8_t>(plant.plantType);
-        bool alreadySent = false;
-        for (size_t j = 0; j < sentCount; j++) {
-            if (sentTypes[j] == typeId) { alreadySent = true; break; }
-        }
-        if (alreadySent) continue;
-
-        switch (plant.plantType) {
-            case PHOTOVOLTAIC: updatePhotovoltaic(typeId, plant); break;
-            case WIND:         updateWind(typeId, plant); break;
-            case NUCLEAR:      updateNuclear(typeId, plant); break;
-            case GAS:          updateGas(typeId, plant); break;
-            case HYDRO:        updateHydro(typeId, plant); break;
-            case HYDRO_STORAGE:updateHydroStorage(typeId, plant); break;
-            case COAL:         updateCoal(typeId, plant); break;
-            case BATTERY:      updateBattery(typeId, plant); break;
-            default: {
-                extern void sendPjonCommand(uint8_t slaveType, uint8_t commandType, uint8_t value);
-                uint8_t attractionState = (plant.maxWatts > 0.0f && plant.powerPercentage.load() > 0.5f) ? 1 : 0;
-                sendPjonCommand(typeId, 0x10, attractionState);
-            } break;
-        }
-    }*/
 
     lastUartAttractionUpdate = millis();
 }
