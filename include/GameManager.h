@@ -351,7 +351,7 @@ private:
             // Update power bargraph based on encoder percentage
             if (plant.powerBargraph) {
                 uint8_t desiredLEDs;
-                
+
                 // If powerplant type is disabled (max power = 0), show 0 bars
                 if (plant.maxWatts <= 0.0f) {
                     desiredLEDs = 10; // Hardware inverted: 10 = no LEDs lit
@@ -359,9 +359,11 @@ private:
                     // Calculate bargraph value: 0% encoder = 0 LEDs, 100% encoder = 10 LEDs
                     // The hardware is inverted: setValue(0) = fully lit, setValue(10) = not lit
                     // So we invert: 0% → setValue(10), 100% → setValue(0)
-                    desiredLEDs = static_cast<uint8_t>(plant.powerPercentage.load() * 10);
+                    uint8_t leds = static_cast<uint8_t>(plant.powerPercentage.load() * 10);
+                    if (leds > 10) leds = 10;
+                    desiredLEDs = 10 - leds;
                 }
-                
+
                 plant.powerBargraph->setValue(desiredLEDs);
             }
         }
