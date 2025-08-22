@@ -7,6 +7,7 @@
 #include <WiFiUdp.h>
 #include <WiFiClient.h>
 #include <vector>
+#include <algorithm>
 #include "PeripheralFactory.h"
 #include <SPI.h>
 #include <MFRC522.h>
@@ -358,16 +359,37 @@ void parseSlaveInfo(uint8_t *data, size_t length)
         return;
     }
 
-    connectedSlaves.clear();
-
     for (size_t i = 0; i < length; i += 2)
     {
-        UartSlaveInfo slave;
-        slave.slaveType = data[i];
-        slave.amount = data[i + 1];
-        connectedSlaves.push_back(slave);
+        uint8_t type = data[i];
+        uint8_t amount = data[i + 1];
 
-        Serial.printf("[UART] Slave Type %u: %u connected\n", slave.slaveType, slave.amount);
+        bool found = false;
+        for (auto &slave : connectedSlaves)
+        {
+            if (slave.slaveType == type)
+            {
+                slave.amount = amount;
+                found = true;
+                break;
+            }
+        }
+
+        if (!found)
+        {
+            connectedSlaves.push_back({type, amount});
+        }
+
+        // Remove entry if amount is zero
+        if (amount == 0)
+        {
+            connectedSlaves.erase(
+                std::remove_if(connectedSlaves.begin(), connectedSlaves.end(),
+                               [type](const UartSlaveInfo &s) { return s.slaveType == type; }),
+                connectedSlaves.end());
+        }
+
+        Serial.printf("[UART] Slave Type %u: %u connected\n", type, amount);
     }
 
     // Update GameManager with new powerplant information
