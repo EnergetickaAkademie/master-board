@@ -3,11 +3,21 @@
 #include <Arduino.h>
 #include <math.h>
 
+// --- New UART TX hooks provided by the ESP32-S3 main file ---
+extern void sendAttractionCommand(uint8_t slaveType, uint8_t state); // maps to cmd4 0x01/0x02
+extern void sendCmd2B(uint8_t slaveType, uint8_t cmd4);              // sends [type, cmd4]
+
+// --- 4-bit command codes used on the wire (no payload) ---
+static constexpr uint8_t CMD_ON               = 0x01; // generic ON
+static constexpr uint8_t CMD_OFF              = 0x02; // generic OFF
+static constexpr uint8_t CMD_BATTERY_IDLE     = 0x03; // battery -> idle
+static constexpr uint8_t CMD_BATTERY_CHARGE   = 0x04; // battery -> charge/consume
+static constexpr uint8_t CMD_BATTERY_DISCHARGE= 0x05; // battery -> discharge/produce
+
 // Implementation of methods that need ESPGameAPI types
 
 std::vector<ConnectedPowerPlant> GameManager::getConnectedPowerPlants() {
     std::vector<ConnectedPowerPlant> plants;
-    
     // Only report powerplants that are actually connected via UART
     for (const auto& uartPlant : uartPowerplants) {
         if (uartPlant.amount > 0) {
@@ -15,30 +25,25 @@ std::vector<ConnectedPowerPlant> GameManager::getConnectedPowerPlants() {
             plants.push_back({static_cast<uint16_t>(uartPlant.slaveType), totalPower});
         }
     }
-    
     return plants;
 }
 
 std::vector<ConnectedConsumer> GameManager::getConnectedConsumers() {
     std::vector<ConnectedConsumer> consumers;
-    
     if (nfcRegistry) {
         auto buildings = nfcRegistry->getAllBuildings();
         for (const auto& building : buildings) {
-            // Use building type as consumer ID for now
-            // You might want to use the UID hash or another unique identifier
+            // use building type as consumer ID for now
             uint32_t consumerId = static_cast<uint32_t>(building.second.buildingType);
             consumers.push_back({consumerId});
         }
     }
-    
     return consumers;
 }
 
 void GameManager::updateUartPowerplants(const std::vector<UartSlaveInfo>& powerplants) {
     uartPowerplants = powerplants;
-    
-    // Update attraction states when powerplant info changes
+    // (optionally trigger an immediate attraction refresh here)
 }
 
 void GameManager::updateAttractionStates() {
@@ -69,11 +74,10 @@ void GameManager::updateAttractionStates() {
                     case COAL:         updateCoal(uartPlant.slaveType, plant); break;
                     case BATTERY:      updateBattery(uartPlant.slaveType, plant); break;
                     default: {
-                        extern void sendPjonCommand(uint8_t slaveType, uint8_t commandType, uint8_t value);
+                        // Generic ON/OFF: send ON if enabled (>50%), else OFF
                         uint8_t attractionState = (plant.maxWatts > 0.0f && plant.powerPercentage.load() > 0.5f) ? 1 : 0;
                         Serial.printf("number of connected powerplants for type %u: %u\n", uartPlant.slaveType, uartPlant.amount);
-
-                        sendPjonCommand(uartPlant.slaveType, 0x10, attractionState);
+                        sendAttractionCommand(uartPlant.slaveType, attractionState);
                     } break;
                 }
                 hasLocal = true;
@@ -83,13 +87,11 @@ void GameManager::updateAttractionStates() {
 
         if (!hasLocal) {
             // No local control for this UART type: turn off attraction
-            extern void sendPjonCommand(uint8_t slaveType, uint8_t commandType, uint8_t value);
-            sendPjonCommand(uartPlant.slaveType, 0x10, 0);
+            sendAttractionCommand(uartPlant.slaveType, 0); // OFF (cmd4=0x02)
         }
 
         if (sentCount < sizeof(sentTypes)) sentTypes[sentCount++] = uartPlant.slaveType;
     }
-
 
     lastUartAttractionUpdate = millis();
 }
@@ -99,7 +101,7 @@ float GameManager::calculateTotalPowerForType(uint8_t slaveType) const {
     for (size_t i = 0; i < powerPlantCount; i++) {
         if (static_cast<uint8_t>(powerPlants[i].plantType) == slaveType) {
             const auto& plant = powerPlants[i];
-            
+
             // Find the count of UART powerplants of this type
             for (const auto& uartPlant : uartPowerplants) {
                 if (uartPlant.slaveType == slaveType) {
@@ -107,20 +109,18 @@ float GameManager::calculateTotalPowerForType(uint8_t slaveType) const {
                     if (uartPlant.amount == 0 || plant.maxWatts <= 0.0f) {
                         return 0.0f;
                     }
-                    
+
                     // Calculate power per plant with center snap
                     float powerPerPlant = computePowerPerPlant(plant);
-                    
+
                     // Total power = power per plant * number of connected plants
                     return powerPerPlant * uartPlant.amount;
                 }
             }
-            
             // If no UART data for this type, return 0 (no powerplants connected)
             return 0.0f;
         }
     }
-    
     // If no local controller for this type, return 0
     return 0.0f;
 }
@@ -132,52 +132,45 @@ static inline uint8_t onOffByPercent(const PowerPlant& plant) {
 }
 
 void GameManager::updatePhotovoltaic(uint8_t slaveType, const PowerPlant& plant) {
-    extern void sendPjonCommand(uint8_t slaveType, uint8_t commandType, uint8_t value);
-    sendPjonCommand(slaveType, 0x10, onOffByPercent(plant));
+    sendAttractionCommand(slaveType, onOffByPercent(plant));
 }
 
 void GameManager::updateWind(uint8_t slaveType, const PowerPlant& plant) {
-    extern void sendPjonCommand(uint8_t slaveType, uint8_t commandType, uint8_t value);
-    sendPjonCommand(slaveType, 0x10, onOffByPercent(plant));
+    sendAttractionCommand(slaveType, onOffByPercent(plant));
 }
 
 void GameManager::updateNuclear(uint8_t slaveType, const PowerPlant& plant) {
-    extern void sendPjonCommand(uint8_t slaveType, uint8_t commandType, uint8_t value);
-    sendPjonCommand(slaveType, 0x10, onOffByPercent(plant));
+    sendAttractionCommand(slaveType, onOffByPercent(plant));
 }
 
 void GameManager::updateGas(uint8_t slaveType, const PowerPlant& plant) {
-    extern void sendPjonCommand(uint8_t slaveType, uint8_t commandType, uint8_t value);
-    sendPjonCommand(slaveType, 0x10, onOffByPercent(plant));
+    sendAttractionCommand(slaveType, onOffByPercent(plant));
 }
 
 void GameManager::updateHydro(uint8_t slaveType, const PowerPlant& plant) {
-    extern void sendPjonCommand(uint8_t slaveType, uint8_t commandType, uint8_t value);
-    sendPjonCommand(slaveType, 0x10, onOffByPercent(plant));
+    sendAttractionCommand(slaveType, onOffByPercent(plant));
 }
 
 void GameManager::updateHydroStorage(uint8_t slaveType, const PowerPlant& plant) {
-    extern void sendPjonCommand(uint8_t slaveType, uint8_t commandType, uint8_t value);
-    sendPjonCommand(slaveType, 0x10, onOffByPercent(plant));
+    sendAttractionCommand(slaveType, onOffByPercent(plant));
 }
 
 void GameManager::updateCoal(uint8_t slaveType, const PowerPlant& plant) {
-    extern void sendPjonCommand(uint8_t slaveType, uint8_t commandType, uint8_t value);
-    sendPjonCommand(slaveType, 0x10, onOffByPercent(plant));
+    sendAttractionCommand(slaveType, onOffByPercent(plant));
 }
 
 void GameManager::updateBattery(uint8_t slaveType, const PowerPlant& plant) {
-    extern void sendPjonCommand(uint8_t slaveType, uint8_t commandType, uint8_t value);
     float powerPerPlant = computePowerPerPlant(plant);
-    uint8_t batteryState;
+    uint8_t cmd;
     if (powerPerPlant == 0.0f) {
-        batteryState = 0;        // idle
+        cmd = CMD_BATTERY_IDLE;
     } else if (powerPerPlant < 0.0f) {
-        batteryState = 2;        // charge / consume
+        cmd = CMD_BATTERY_CHARGE;     // consume
     } else {
-        batteryState = 1;        // discharge / produce
+        cmd = CMD_BATTERY_DISCHARGE;  // produce
     }
-    sendPjonCommand(slaveType, 0x20, batteryState);
+    // Send as pure 2B command [type, cmd4]
+    sendCmd2B(slaveType, cmd);
 }
 
 // Compute power per plant with a zero-centered deadband for symmetric ranges

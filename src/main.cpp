@@ -1,6 +1,6 @@
 /***********************************************************************
- *  Master Board ESP32‑S3 – spin‑lock‑safe version
- *  Last edit: 2025‑07‑28
+ *  Master Board ESP32-S3 – spin-lock-safe version
+ *  Last edit: 2025-07-28 (UART changed to 2B: [slaveType, cmd4])
  ******************************************************************************/
 #include <Arduino.h>
 #include <WiFi.h>
@@ -50,8 +50,8 @@
 #define COMPROT_PIN 19
 
 /* UART Communication with Retranslation Station */
-#define UART_RX_PIN 19 // 47//
-#define UART_TX_PIN 47 // 19
+#define UART_RX_PIN  19//
+#define UART_TX_PIN 47
 
 /* ------------------------------------------------------------------ */
 /*                     SERVER IP DISCOVERY                            */
@@ -63,8 +63,6 @@ static const uint8_t SERVER_MAC_2[6] = {0x00, 0xD8, 0x61, 0x31, 0x29, 0xC5};
 WiFiUDP udp;
 
 // Find HTTP server by connecting and then checking if we can find the expected MAC
-// Note: Since low-level ARP table access is not reliably available in Arduino framework,
-// we'll use a simplified approach that just finds HTTP servers
 IPAddress findHttpServer()
 {
     IPAddress myIp = WiFi.localIP();
@@ -82,7 +80,7 @@ IPAddress findHttpServer()
                   SERVER_MAC_2[0], SERVER_MAC_2[1], SERVER_MAC_2[2],
                   SERVER_MAC_2[3], SERVER_MAC_2[4], SERVER_MAC_2[5]);
 
-    // Calculate subnet base address using proper octet handling
+    // Calculate subnet base address
     uint8_t subnet[4] = {(uint8_t)(myIp[0] & mask[0]),
                          (uint8_t)(myIp[1] & mask[1]),
                          (uint8_t)(myIp[2] & mask[2]),
@@ -93,7 +91,7 @@ IPAddress findHttpServer()
     uint32_t hostsScanned = 0;
 
     // First try common server IPs
-    uint8_t commonHosts[] = {2, 6, 210, 11, 100, 106, 106, 101, 106, 200, 201, 4, 5, 7, 8, 9, 10, 12, 13, 14, 15, 3, 106, 106, 106};
+    uint8_t commonHosts[] = {2, 6, 210, 11, 100, 105, 105, 106, 106, 101, 106, 200, 201, 4, 5, 7, 8, 9, 10, 12, 13, 14, 105, 15, 3, 106, 106, 106};
     for (uint8_t host : commonHosts)
     {
         IPAddress target(subnet[0], subnet[1], subnet[2], host);
@@ -207,46 +205,36 @@ IPAddress findServerByBroadcast()
 }
 
 /* ------------------------------------------------------------------ */
-/*                        COM-PROT CONFIGURATION                      */
-/* ------------------------------------------------------------------ */
-// Create master instance - Master ID 1, pin 19 (COMPROT_PIN)
-/*
-ComProtMaster master(1, COMPROT_PIN);
-*/
-
-/* ------------------------------------------------------------------ */
 /*                    UART COMMUNICATION PROTOCOL                     */
 /* ------------------------------------------------------------------ */
-// UART protocol structures - UartSlaveInfo is defined in GameManager.h
+/*
+   New UART master<->retranslation protocol:
+   - TX from this ESP32-S3: exactly 2 bytes: [slaveType, cmd4]
+     * cmd4 is 4-bit command (0x01=ON, 0x02=OFF, ...)
 
-// Generic PJON command sent to retranslation station over UART
-// commandType examples:
-//   0x10 = Attraction on/off (value: 0=OFF, 1=ON)
-//   0x20 = Battery mode/state (value: 0=idle, 1=discharge/produce, 2=charge/consume)
-struct PjonCommand
-{
-    uint8_t slaveType;   // Powerplant type to target
-    uint8_t commandType; // PJON command type
-    uint8_t value;       // Single-byte payload/value
-};
+   - RX from retranslation: packed pairs [slaveType, amount] repeating
+     (parsed in parseSlaveInfo())
+*/
+
+// 4-bit command constants (optional helpers)
+static const uint8_t CMD_ON  = 0x01;
+static const uint8_t CMD_OFF = 0x02;
 
 // UART communication variables
 HardwareSerial uartComm(1); // Use UART1
 unsigned long lastUartReceive = 0;
 
 // Storage for connected slaves from retranslation station
-std::vector<UartSlaveInfo> connectedSlaves;
+std::vector<UartSlaveInfo> connectedSlaves; // struct defined in GameManager.h
 
 // Function prototypes
 void processUartData();
-void sendPjonCommand(uint8_t slaveType, uint8_t commandType, uint8_t value);
-// Backward-compatible helper for attraction commands (0x10)
-void sendAttractionCommand(uint8_t slaveType, uint8_t state);
 void parseSlaveInfo(uint8_t *data, size_t length);
+
+
 /* ------------------------------------------------------------------ */
 /*                    GLOBAL STATE & FORWARD DECLS                    */
 /* ------------------------------------------------------------------ */
-// Game state is now managed by GameManager singleton
 unsigned long lastUpdateTime = 0;
 unsigned long lastDebugTime = 0;
 
@@ -267,78 +255,6 @@ MFRC522 mfrc522(NFC_SS_PIN, NFC_RST_PIN);
 NFCBuildingRegistry nfcRegistry(&mfrc522);
 
 /* ------------------------------------------------------------------ */
-/*                      COM-PROT INTERRUPT HANDLER                    */
-/* ------------------------------------------------------------------ */
-// This ISR is called on a rising edge on the COM-PROT pin.
-// It immediately calls receive() to handle the incoming message.
-// NOTE: The receive() function must be safe to call from an ISR.
-/*
-void IRAM_ATTR onComProtRise() {
-    master.receive();
-
-}*/
-
-/* ------------------------------------------------------------------ */
-/*                           COM-PROT TASK                            */
-/* ------------------------------------------------------------------ */
-TaskHandle_t comProtTaskHandle = nullptr;
-/*
-void comProtTask(void* pvParameters) {
-    unsigned long lastDebugTime = 0;
-    Serial.println("[COM-PROT Task] Running on core " + String(xPortGetCoreID()));
-
-    for (;;) {
-        master.update();
-
-        if (millis() - lastDebugTime >= POWER_PLANT_DEBUG_INTERVAL) {
-            auto allSlaves = master.getConnectedSlaves();
-            Serial.printf("[COM-PROT] Active power plants: %d\n", allSlaves.size());
-
-            for (const auto& slave : allSlaves) {
-                Serial.printf("[COM-PROT]   Power Plant ID=%d, Type=%d\n", slave.id, slave.type);
-            }
-
-            // Example: Send LED toggle command to type 1 slaves every debug cycle
-            if (master.getSlavesByType(1).size() > 0) {
-                uint8_t ledState = (millis() / 10000) % 2; // Toggle every 10 seconds
-                master.sendCommandToSlaveType(1, 0x10, &ledState, 1);
-                Serial.printf("[COM-PROT] Sent LED command (state=%d) to type 1 power plants\n", ledState);
-            }
-            lastDebugTime = millis();
-        }
-        // master.receive(); // This is now handled by the ISR
-        taskYIELD(); // Yield to other tasks, allows for very high update rate
-    }
-}*/
-
-/* ------------------------------------------------------------------ */
-/*                           NFC CONNECTION TEST                      */
-/* ------------------------------------------------------------------ */
-
-/* ------------------------------------------------------------------ */
-/*                        COM-PROT DEBUG HANDLER                      */
-/* ------------------------------------------------------------------ */
-
-// Debug receive handler - called for every received message
-/*
-void debugReceiveHandler(uint8_t* payload, uint16_t length, uint8_t senderId, uint8_t messageType) {
-    // Only log non-heartbeat messages to avoid spam
-    if (messageType != 0x03) { // Skip heartbeat messages
-        Serial.printf("[COM-PROT] RX from slave %d: type=0x%02X, len=%d\n", senderId, messageType, length);
-    }
-
-    // Log heartbeat messages with less detail
-    if (messageType == 0x03) {
-        static unsigned long lastHeartbeatLog = 0;
-        if (millis() - lastHeartbeatLog > 5000) { // Log every 5 seconds
-            Serial.printf("[COM-PROT] Heartbeats active from %d slaves\n", master.getSlaveCount());
-            lastHeartbeatLog = millis();
-        }
-    }
-}
-*/
-
-/* ------------------------------------------------------------------ */
 /*                        WIFI CONNECTION                             */
 /* ------------------------------------------------------------------ */
 
@@ -347,29 +263,21 @@ void printWiFiStatusCode(wl_status_t status)
     switch (status)
     {
     case WL_IDLE_STATUS:
-        Serial.print("Idle");
-        break;
+        Serial.print("Idle"); break;
     case WL_NO_SSID_AVAIL:
-        Serial.print("No SSID Available");
-        break;
+        Serial.print("No SSID Available"); break;
     case WL_SCAN_COMPLETED:
-        Serial.print("Scan Completed");
-        break;
+        Serial.print("Scan Completed"); break;
     case WL_CONNECTED:
-        Serial.print("Connected");
-        break;
+        Serial.print("Connected"); break;
     case WL_CONNECT_FAILED:
-        Serial.print("Connection Failed");
-        break;
+        Serial.print("Connection Failed"); break;
     case WL_CONNECTION_LOST:
-        Serial.print("Connection Lost");
-        break;
+        Serial.print("Connection Lost"); break;
     case WL_DISCONNECTED:
-        Serial.print("Disconnected");
-        break;
+        Serial.print("Disconnected"); break;
     default:
-        Serial.print("Unknown Status");
-        break;
+        Serial.print("Unknown Status"); break;
     }
 }
 
@@ -377,8 +285,6 @@ bool connectToWiFi()
 {
     const char *ssid = "PotkaniNora";
     const char *password = "PrimaryPapikTarget";
-    // const char* ssid = "Bagr";
-    // const char* password = "bagroviste";
     const int max_connection_attempts = 10;
 
     WiFi.mode(WIFI_STA);
@@ -401,17 +307,13 @@ bool connectToWiFi()
         switch (WiFi.status())
         {
         case WL_NO_SSID_AVAIL:
-            Serial.print(" [SSID not found]");
-            break;
+            Serial.print(" [SSID not found]"); break;
         case WL_CONNECT_FAILED:
-            Serial.print(" [Connection failed]");
-            break;
+            Serial.print(" [Connection failed]"); break;
         case WL_CONNECTION_LOST:
-            Serial.print(" [Connection lost]");
-            break;
+            Serial.print(" [Connection lost]"); break;
         case WL_DISCONNECTED:
-            Serial.print(" [Disconnected]");
-            break;
+            Serial.print(" [Disconnected]"); break;
         }
     }
 
@@ -447,6 +349,7 @@ void initUartCommunication()
     Serial.println("[UART] Communication initialized on pins RX=19, TX=47, baud=9600");
 }
 
+// Parse list of pairs [type, amount] sent by retranslation station
 void parseSlaveInfo(uint8_t *data, size_t length)
 {
     if (length % 2 != 0)
@@ -486,24 +389,11 @@ void processUartData()
 
         if (bytesRead > 0)
         {
+            Serial.printf("[UART] Received %zu bytes: ", bytesRead);
             parseSlaveInfo(buffer, bytesRead);
             lastUartReceive = millis();
         }
     }
-}
-
-void sendPjonCommand(uint8_t slaveType, uint8_t commandType, uint8_t value)
-{
-    PjonCommand cmd{slaveType, commandType, value};
-    uartComm.write(reinterpret_cast<uint8_t *>(&cmd), sizeof(cmd));
-    Serial.printf("[UART] Sent PJON cmd: Type=%u, Cmd=0x%02X, Val=%u\n",
-                  slaveType, commandType, value);
-}
-
-void sendAttractionCommand(uint8_t slaveType, uint8_t state)
-{
-    // Wrapper using command 0x10
-    sendPjonCommand(slaveType, 0x10, state);
 }
 
 /* ------------------------------------------------------------------ */
@@ -556,28 +446,19 @@ void initPeripherals()
     bargraph4->setValue(5);
     bargraph5->setValue(4);
     bargraph6->setValue(4);
-    // Initialize the GameManager with power plant type controls
-    // This registers what types we can control, actual counts come from UART
+
     auto &gameManager = GameManager::getInstance();
 
-    // Register Coal control (encoder1, display1, bargraph1)
-    gameManager.registerPowerPlantTypeControl(COAL, encoder1, display1, bargraph1);
-
-    // Register Gas control (encoder2, display2, bargraph2)
-    gameManager.registerPowerPlantTypeControl(GAS, encoder2, display2, bargraph2);
-
-    gameManager.registerPowerPlantTypeControl(NUCLEAR, encoder3, display3, bargraph3);
-
-    gameManager.registerPowerPlantTypeControl(BATTERY, encoder4, display4, bargraph4);
-
-    gameManager.registerPowerPlantTypeControl(WIND, nullptr, display5, bargraph5);
-
+    gameManager.registerPowerPlantTypeControl(COAL,   encoder1, display1, bargraph1);
+    gameManager.registerPowerPlantTypeControl(GAS,    encoder2, display2, bargraph2);
+    gameManager.registerPowerPlantTypeControl(NUCLEAR,encoder3, display3, bargraph3);
+    gameManager.registerPowerPlantTypeControl(BATTERY,encoder4, display4, bargraph4);
+    gameManager.registerPowerPlantTypeControl(WIND,   nullptr,  display5, bargraph5);
     gameManager.registerPowerPlantTypeControl(PHOTOVOLTAIC, nullptr, display6, bargraph6);
 
-    // Periodic attraction updates (decoupled from UART slave info arrival)
-    // Runs every 300 ms to push on/off / battery state updates regularly
+    // Push attraction states periodically
     factory.createPeriodic(1000, []()
-                           { GameManager::getInstance().updateAttractionStates(); });
+    { GameManager::getInstance().updateAttractionStates(); });
 }
 
 TaskHandle_t ioTaskHandle = nullptr;
@@ -585,14 +466,9 @@ void ioTask(void *)
 {
     for (;;)
     {
-        // Update displays using GameManager
         GameManager::updateDisplays();
-        // master.receive(); // This is now handled by the ISR
-
-        factory.update(); // all the SPI/GPIO work
-        // master.receive(); // This is now handled by the ISR
-
-        vTaskDelay(1); // 1 ms = 1 kHz; tune as you like
+        factory.update();
+        vTaskDelay(1); // ~1kHz
     }
 }
 
@@ -601,18 +477,11 @@ void setup()
     Serial.begin(115200);
     Serial.println("\nMaster Board ESP32-S3 booting…");
 
-    /*pinMode(BUZZER_PIN, OUTPUT);
-    digitalWrite(BUZZER_PIN, LOW);
-
-    /* ---------- Wi‑Fi & ESP-API initialization ---------- */
     if (connectToWiFi())
     {
         Serial.println("\n🔍 Discovering server...");
 
-        // Try MAC-based HTTP server discovery first (most reliable)
         IPAddress serverIp = findHttpServer();
-
-        // If MAC discovery fails, try UDP broadcast discovery as fallback
         if (!serverIp)
         {
             Serial.println("[Server Discovery] MAC discovery failed, trying UDP broadcast discovery...");
@@ -641,6 +510,7 @@ void setup()
     {
         Serial.println("[ESP-API] Skipped due to WiFi connection failure");
     }
+
     initPeripherals();
 
     // ---------- UART Communication Initialization ----------
@@ -659,42 +529,15 @@ void setup()
     auto &gameManager = GameManager::getInstance();
     gameManager.initNfcRegistry(&nfcRegistry);
 
-    /* ---------- COM-PROT Master Initialization ----------
-    Serial.println("\n🔧 Initializing COM-PROT Master...");*/
-
-    // Set debug receive handler
-    // master.setDebugReceiveHandler(debugReceiveHandler);
-
-    // Initialize the master
-    // master.begin();
-
-    // Attach interrupt for COM-PROT pin
-    // pinMode(COMPROT_PIN, INPUT);
-    // attachInterrupt(digitalPinToInterrupt(COMPROT_PIN), onComProtRise, RISING);
-
-    // Create ComProt task on core 0
-    /*xTaskCreatePinnedToCore(
-        comProtTask,          // Task function
-        "ComProt",            // Task name
-        4096,                 // Stack size
-        nullptr,              // Task parameters
-        2,                    // Priority
-        &comProtTaskHandle,   // Task handle
-        1                     // Core ID
-    );*/
-
-    // Increase priority of the loop task
-
-    Serial.printf("[COM-PROT] Master initialized on pin %d\n", COMPROT_PIN);
-    Serial.println("[COM-PROT] Ready to discover power plants...");
-
+    Serial.printf("[COM-PROT] Master (via retranslation) UART on RX=%d, TX=%d\n", UART_RX_PIN, UART_TX_PIN);
     Serial.println("Setup done ✓");
+
     xTaskCreatePinnedToCore(
         ioTask,  // task function
         "IO",    // name
         4096,    // stack bytes
         nullptr, // param
-        1,       // priority (higher than default=1)
+        1,       // priority
         &ioTaskHandle,
         1);
 }
@@ -708,34 +551,13 @@ void loop()
     if (WiFi.status() == WL_CONNECTED && GameManager::getInstance().updateEspApi())
         GameManager::getInstance().updateCoefficientsFromGame();
 
-    // COM-PROT logic is now in its own task (comProtTask)
-
-    // NFC scanning with basic status
-    /*
-
-    long now = millis();*/
     GameManager::getInstance().update(); // update game logic
 
-    // UART Communication processing
+    // UART Communication processing (receive slave info)
     processUartData();
-
-    // Ensure GameManager receives UART powerplant info periodically,
-    // not only when new UART data is parsed, so attraction logic is responsive
-    static unsigned long lastUartPushTime = 0;
-    /*if (millis() - lastUartPushTime >= 300)
-    {
-        GameManager::getInstance().updateUartPowerplants(connectedSlaves);
-        lastUartPushTime = millis();
-    }*/
-
-    // long elapsed = millis() - now;
-
-    // master.update();
-    // master.update();
 
     if (millis() - lastDebugTime >= POWER_PLANT_DEBUG_INTERVAL)
     {
-        // master.receive(); // This is now handled by the ISR
         lastDebugTime = millis();
         static unsigned long lastNfcScan = 0;
         if (millis() - lastNfcScan >= 100)
@@ -749,7 +571,6 @@ void loop()
         }
         nfcRegistry.printDatabase(); // Print NFC registry info
 
-        // list nfc cards aka consumers
         GameManager::printDebugInfo();
     }
 }
