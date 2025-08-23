@@ -15,6 +15,13 @@ static constexpr uint8_t CMD_BATTERY_IDLE     = 0x03; // battery -> idle
 static constexpr uint8_t CMD_BATTERY_CHARGE   = 0x04; // battery -> charge/consume
 static constexpr uint8_t CMD_BATTERY_DISCHARGE= 0x05; // battery -> discharge/produce
 
+// Hydro storage command codes (5 levels)
+static constexpr uint8_t CMD_HYDRO_STORAGE_LEVEL_1 = 0x0B; // 100% Full - Green (Discharging)
+static constexpr uint8_t CMD_HYDRO_STORAGE_LEVEL_2 = 0x0C; // 75% Full - Light Green
+static constexpr uint8_t CMD_HYDRO_STORAGE_LEVEL_3 = 0x0D; // 50% Full - Orange (Idle)
+static constexpr uint8_t CMD_HYDRO_STORAGE_LEVEL_4 = 0x0E; // 25% Full - Light Red
+static constexpr uint8_t CMD_HYDRO_STORAGE_LEVEL_5 = 0x0F; // 0% Empty - Red (Charging)
+
 // Implementation of methods that need ESPGameAPI types
 
 std::vector<ConnectedPowerPlant> GameManager::getConnectedPowerPlants() {
@@ -22,6 +29,7 @@ std::vector<ConnectedPowerPlant> GameManager::getConnectedPowerPlants() {
     // Only report powerplants that are actually connected via UART
     for (const auto& uartPlant : uartPowerplants) {
         if (uartPlant.amount > 0) {
+            // Calculate individual power for each type (separate battery and hydro storage)
             float totalPower = calculateTotalPowerForType(uartPlant.slaveType);
             plants.push_back({static_cast<uint16_t>(uartPlant.slaveType), totalPower});
         }
@@ -283,7 +291,61 @@ void GameManager::updateHydro(uint8_t slaveType, const PowerPlant& plant) {
 }
 
 void GameManager::updateHydroStorage(uint8_t slaveType, const PowerPlant& plant) {
-    sendAttractionCommand(slaveType, onOffByPercent(plant));
+    // Hydro storage powerplant with 5-level control similar to battery
+    // Maps encoder percentage to 5 storage levels with middle stages
+    // Uses the same encoder control as battery but different command mapping
+    // 
+    // The hydro storage acts as a battery-like device but with 5 visual levels:
+    // - Level 1 (100% Full): Heavy discharging (producing power)
+    // - Level 2 (75% Full): Light discharging  
+    // - Level 3 (50% Full): Idle state (neutral)
+    // - Level 4 (25% Full): Light charging (consuming power)
+    // - Level 5 (0% Empty): Heavy charging
+    
+    if (plant.maxWatts <= 0.0f) {
+        sendCmd2B(slaveType, CMD_OFF);
+        return;
+    }
+    
+    float powerPerPlant = computePowerPerPlant(plant);
+    uint8_t cmd;
+    
+    // Normalize power to percentage of range for level determination
+    float range = plant.maxWatts - plant.minWatts;
+    float normalizedPower = (range > 0) ? powerPerPlant / (range * 0.5f) : 0.0f; // Scale to ±1.0
+    
+    // Map normalized power to 5 hydro storage levels
+    // More gradual transitions than battery for better visual feedback
+    if (normalizedPower <= -0.6f) {
+        cmd = CMD_HYDRO_STORAGE_LEVEL_5; // 0% Empty - Red (Heavy Charging)
+    } else if (normalizedPower <= -0.2f) {
+        cmd = CMD_HYDRO_STORAGE_LEVEL_4; // 25% - Light Red (Light Charging)
+    } else if (normalizedPower >= 0.6f) {
+        cmd = CMD_HYDRO_STORAGE_LEVEL_1; // 100% Full - Green (Heavy Discharging)
+    } else if (normalizedPower >= 0.2f) {
+        cmd = CMD_HYDRO_STORAGE_LEVEL_2; // 75% - Light Green (Light Discharging)
+    } else {
+        cmd = CMD_HYDRO_STORAGE_LEVEL_3; // 50% - Orange (Idle)
+    }
+    
+    // Send as pure 2B command [type, cmd4]
+    sendCmd2B(slaveType, cmd);
+    
+    // Debug output
+    static unsigned long lastHydroStorageDebug = 0;
+    if (millis() - lastHydroStorageDebug > 3000) { // Debug every 3 seconds
+        const char* levelName = "UNKNOWN";
+        switch (cmd) {
+            case CMD_HYDRO_STORAGE_LEVEL_1: levelName = "100% Full (Heavy Discharging)"; break;
+            case CMD_HYDRO_STORAGE_LEVEL_2: levelName = "75% (Light Discharging)"; break;
+            case CMD_HYDRO_STORAGE_LEVEL_3: levelName = "50% (Idle)"; break;
+            case CMD_HYDRO_STORAGE_LEVEL_4: levelName = "25% (Light Charging)"; break;
+            case CMD_HYDRO_STORAGE_LEVEL_5: levelName = "0% Empty (Heavy Charging)"; break;
+        }
+        Serial.printf("[HYDRO_STORAGE] Power=%.2fW, Normalized=%.2f -> %s (cmd=0x%02X)\n", 
+                     powerPerPlant, normalizedPower, levelName, cmd);
+        lastHydroStorageDebug = millis();
+    }
 }
 
 void GameManager::updateCoal(uint8_t slaveType, const PowerPlant& plant) {

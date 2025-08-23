@@ -447,6 +447,7 @@ void initPeripherals()
     gameManager.registerPowerPlantTypeControl(GAS,    encoder2, display2, bargraph2);
     gameManager.registerPowerPlantTypeControl(NUCLEAR,encoder3, display3, bargraph3);
     gameManager.registerPowerPlantTypeControl(BATTERY,encoder4, display4, bargraph4);
+    gameManager.registerPowerPlantTypeControl(HYDRO_STORAGE, encoder4, display4, bargraph4); // Share with battery
     gameManager.registerPowerPlantTypeControl(WIND,   nullptr,  display5, bargraph5);
     gameManager.registerPowerPlantTypeControl(PHOTOVOLTAIC, nullptr, display6, bargraph6);
     gameManager.registerPowerPlantTypeControl(HYDRO,  nullptr,  display7, bargraph7);

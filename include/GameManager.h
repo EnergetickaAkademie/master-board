@@ -89,8 +89,8 @@ struct PowerPlant {
 class GameManager {
 private:
     // Maximum number of power plant types we can control locally
-    static constexpr size_t MAX_POWER_PLANTS = 7;
-    static constexpr unsigned long ATTRACTION_UPDATE_MS = 25;
+    static constexpr size_t MAX_POWER_PLANTS = 8;
+    static constexpr unsigned long ATTRACTION_UPDATE_MS = 200;
     
     // Array of local power plant type controllers (encoder + display)
     // The actual count of powerplants comes from UART
@@ -351,6 +351,26 @@ public:
                 // Regulable source: read encoder value and convert to percentage
                 float newPercentage = plant.encoder->getValue() / 1000.0f;
                 plant.powerPercentage = newPercentage;
+                
+                // For HYDRO_STORAGE sharing encoder with BATTERY, copy the same percentage
+                if (plant.plantType == BATTERY) {
+                    // Find hydro storage plant and sync its percentage
+                    for (size_t j = 0; j < powerPlantCount; j++) {
+                        if (powerPlants[j].plantType == HYDRO_STORAGE) {
+                            powerPlants[j].powerPercentage = newPercentage;
+                            break;
+                        }
+                    }
+                }
+                else if (plant.plantType == HYDRO_STORAGE) {
+                    // Find battery plant and sync from it (battery should be registered first)
+                    for (size_t j = 0; j < powerPlantCount; j++) {
+                        if (powerPlants[j].plantType == BATTERY && powerPlants[j].encoder) {
+                            plant.powerPercentage = powerPlants[j].encoder->getValue() / 1000.0f;
+                            break;
+                        }
+                    }
+                }
             } else {
                 // Unregulable source: always run at maximum power (100%)
                 plant.powerPercentage = 1.0f;
@@ -382,6 +402,16 @@ private:
             
             // Calculate total power for this type including UART powerplants
             float totalPowerForType = calculateTotalPowerForType(static_cast<uint8_t>(plant.plantType));
+            
+            // For battery display, also add hydro storage power (they share display)
+            if (plant.plantType == BATTERY) {
+                float hydroStoragePower = calculateTotalPowerForType(static_cast<uint8_t>(HYDRO_STORAGE));
+                totalPowerForType += hydroStoragePower;
+            }
+            // For hydro storage, skip display update since it shares with battery
+            else if (plant.plantType == HYDRO_STORAGE) {
+                continue; // Skip individual display update, handled by battery
+            }
             
             // Update power displays with total power (including count)
             if (plant.powerDisplay) {
