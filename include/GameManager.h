@@ -88,8 +88,8 @@ struct PowerPlant {
 
 class GameManager {
 private:
-    // Maximum number of power plant types we can control locally (increased to include HYDRO)
-    static constexpr size_t MAX_POWER_PLANTS = 8;
+    // Maximum number of power plant types we can control locally
+    static constexpr size_t MAX_POWER_PLANTS = 7;
     static constexpr unsigned long ATTRACTION_UPDATE_MS = 300; // Update UART attraction states every 300ms
     
     // Array of local power plant type controllers (encoder + display)
@@ -111,9 +111,9 @@ private:
     std::atomic<float> totalConsumption;
     unsigned long lastConsumptionUpdate;
 
-    // Throttling for unified production data (ranges + coefficients)
-    unsigned long lastProductionDataRequest;
-    static constexpr unsigned long PRODUCTION_DATA_REQUEST_INTERVAL_MS = 3000; // Request both ranges & coefficients every 3 seconds
+    // Throttling for server requests
+    unsigned long lastRequestTime;
+    static constexpr unsigned long REQUEST_INTERVAL_MS = 3000; // Request both coefficients and ranges every 3 seconds
 
     // Private constructor for singleton
     GameManager() :
@@ -122,8 +122,8 @@ private:
         nfcRegistry(nullptr),
         lastUartAttractionUpdate(0),
         totalConsumption(0.0f),
-    lastConsumptionUpdate(0),
-    lastProductionDataRequest(0) {
+        lastConsumptionUpdate(0),
+        lastRequestTime(0) {
         // Initialize power plants array
         for (auto& plant : powerPlants) {
             plant = PowerPlant();
@@ -153,11 +153,14 @@ public:
         if (espApi->login(username, password) && espApi->registerBoard()) {
             espApi->printStatus();
             
-            // Request initial unified production data (ranges + coefficients)
-            Serial.println("[GameManager] Requesting initial production data (ranges + coefficients)...");
-            requestProductionData();
+            // Request initial production ranges and coefficients
+            Serial.println("[GameManager] Requesting initial production ranges and coefficients...");
+            requestProductionRanges();
+            requestProductionCoefficients();
+            
             // Initialize throttling timer
-            lastProductionDataRequest = millis();
+            unsigned long now = millis();
+            lastRequestTime = now;
         } else {
             Serial.println("[GameManager] ESP-API login or registration failed");
         }
@@ -240,23 +243,35 @@ public:
     // Update ESP-API (call this in main loop)
     bool updateEspApi() {
         bool result = espApi ? espApi->update() : false;
-
+        
+        // If connected, request production ranges and coefficients
+        // But throttle the requests to avoid spamming the server
         if (result && espApi) {
             unsigned long now = millis();
-            if (now - lastProductionDataRequest >= PRODUCTION_DATA_REQUEST_INTERVAL_MS) {
-                requestProductionData();
-                lastProductionDataRequest = now;
+            
+            // Request both ranges and coefficients every 3 seconds
+            if (now - lastRequestTime >= REQUEST_INTERVAL_MS) {
+                requestProductionRanges();
+                requestProductionCoefficients();
+                lastRequestTime = now;
             }
         }
+        
         return result;
     }
     
     // Request production ranges from server
     void requestProductionRanges() {
         if (!espApi) return;
+        
         espApi->getProductionRanges([this](bool success, const std::vector<ProductionRange>& ranges, const std::string& error) {
             if (success) {
-                updateCoefficientsFromGame(); // Update local min/max
+                static unsigned long lastLogTime = 0;
+                if (millis() - lastLogTime > 10000) { // Log only every 10 seconds
+                    Serial.println("📊 Production ranges received from server");
+                    lastLogTime = millis();
+                }
+                updateCoefficientsFromGame(); // This will update both coefficients and ranges
             } else {
                 Serial.println("❌ Failed to get production ranges: " + String(error.c_str()));
             }
@@ -266,27 +281,19 @@ public:
     // Request production coefficients from server
     void requestProductionCoefficients() {
         if (!espApi) return;
+        
         espApi->pollCoefficients([this](bool success, const std::string& error) {
-            if (!success) {
+            if (success) {
+                static unsigned long lastLogTime = 0;
+                if (millis() - lastLogTime > 10000) { // Log only every 10 seconds
+                    Serial.println("📊 Production coefficients received from server");
+                    lastLogTime = millis();
+                }
+                // Coefficients are automatically stored in espApi and can be accessed via getProductionCoefficients()
+            } else {
                 Serial.println("❌ Failed to get production coefficients: " + String(error.c_str()));
             }
         });
-    }
-
-    // Unified request for both ranges and coefficients
-    void requestProductionData() {
-        if (!espApi) return;
-        static unsigned long lastLogTime = 0;
-        bool logNow = (millis() - lastLogTime) > 10000;
-        if (logNow) {
-            Serial.println("� Requesting production data (ranges + coefficients)");
-        }
-        // Request ranges first so min/max are updated before coefficient-based logic uses them
-        requestProductionRanges();
-        requestProductionCoefficients();
-        if (logNow) {
-            lastLogTime = millis();
-        }
     }
 
     // Delete copy/move constructors and assignment operators
@@ -536,22 +543,6 @@ private:
                           i, static_cast<uint8_t>(plant.plantType), plant.powerPercentage.load() * 100,
                           powerPerPlant, uartCount, totalForType,
                           plant.minWatts, plant.maxWatts, status);
-        }
-        
-        // Print UART powerplants without local control
-        for (const auto& uartPlant : uartPowerplants) {
-            bool hasLocalControl = false;
-            for (size_t i = 0; i < powerPlantCount; i++) {
-                if (static_cast<uint8_t>(powerPlants[i].plantType) == uartPlant.slaveType) {
-                    hasLocalControl = true;
-                    break;
-                }
-            }
-            
-            if (!hasLocalControl && uartPlant.amount > 0) {
-                Serial.printf("  [UART] Type:%u Count:%u (No local control)\n",
-                             uartPlant.slaveType, uartPlant.amount);
-            }
         }
         
         // Print connected buildings info

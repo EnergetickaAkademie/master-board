@@ -411,7 +411,6 @@ void initPeripherals()
     Serial.println("[Peripherals] Encoders initialized");
 
     shiftChain = factory.createShiftRegisterChain(LATCH_PIN, DATA_PIN, CLOCK_PIN);
-
     bargraph7 = factory.createBargraph(shiftChain, 10);
     display7 = factory.createSegmentDisplay(shiftChain, 4);
     bargraph6 = factory.createBargraph(shiftChain, 10);
@@ -450,8 +449,7 @@ void initPeripherals()
     gameManager.registerPowerPlantTypeControl(BATTERY,encoder4, display4, bargraph4);
     gameManager.registerPowerPlantTypeControl(WIND,   nullptr,  display5, bargraph5);
     gameManager.registerPowerPlantTypeControl(PHOTOVOLTAIC, nullptr, display6, bargraph6);
-    // Add HYDRO (unregulated -> nullptr encoder) so its contribution is calculated
-    gameManager.registerPowerPlantTypeControl(HYDRO,  nullptr,  display7, bargraph7); // reuse display7 if spare or assign a new one when hardware available
+    gameManager.registerPowerPlantTypeControl(HYDRO,  nullptr,  display7, bargraph7);
 
     // Push attraction states periodically
     factory.createPeriodic(1000, []()

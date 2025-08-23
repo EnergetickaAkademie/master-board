@@ -206,7 +206,39 @@ void GameManager::updateNuclear(uint8_t slaveType, const PowerPlant& plant) {
 }
 
 void GameManager::updateGas(uint8_t slaveType, const PowerPlant& plant) {
-    sendAttractionCommand(slaveType, onOffByPercent(plant));
+    // Gas powerplant expanded to 10 levels (commands 0x06 - 0x0F)
+    // Mapping encoder percentage -> level in 10% bands (with OFF below 5%)
+    if (plant.maxWatts <= 0.0f) {
+        sendCmd2B(slaveType, CMD_OFF);
+        return;
+    }
+
+    float pct = plant.powerPercentage.load();
+    uint8_t gasCommand = CMD_OFF;
+
+    if (pct < 0.05f) {
+        gasCommand = CMD_OFF; // below 5% off
+    } else {
+        // Determine level 1..10
+        int level = (int)floorf(pct * 10.0f); // 0..10
+        if (level == 0) level = 1;            // ensure at least level 1 for >=5%
+        if (level > 10) level = 10;
+        // Map level to command code: level1->0x06 ... level10->0x0F
+        gasCommand = 0x05 + level; // 0x06..0x0F
+    }
+
+    sendCmd2B(slaveType, gasCommand);
+
+    static unsigned long lastGasDebug = 0;
+    if (millis() - lastGasDebug > 3000) {
+        if (gasCommand == CMD_OFF) {
+            Serial.printf("[GAS] pct=%.1f%% -> OFF (cmd=0x%02X)\n", pct * 100.0f, gasCommand);
+        } else {
+            int level = gasCommand - 0x05; // 1..10
+            Serial.printf("[GAS] pct=%.1f%% -> Level %d (cmd=0x%02X)\n", pct * 100.0f, level, gasCommand);
+        }
+        lastGasDebug = millis();
+    }
 }
 
 void GameManager::updateHydro(uint8_t slaveType, const PowerPlant& plant) {
