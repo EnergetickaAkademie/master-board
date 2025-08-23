@@ -1,14 +1,16 @@
 #include <Arduino.h>
 #include "uart_link.h"
+#include "robust_uart.h"
 
-// This must be provided by your main file (kept as-is)
+// These must be provided by your main file
 extern HardwareSerial uartComm; // e.g. HardwareSerial uartComm(1);
+extern RobustUart robustUart;    // Robust UART protocol handler
+extern void uartWriteFunction(const uint8_t* data, size_t len); // Defined in main.cpp
 
 void sendCmd2B(uint8_t slaveType, uint8_t cmd4) {
-  uint8_t frame[2] = { slaveType, static_cast<uint8_t>(cmd4 & 0x0F) };
-  uartComm.write(frame, 2);
-  // Optional:
-  // Serial.printf("[UART->RT] TX type=%u cmd=0x%02X\n", frame[0], frame[1]);
+  RobustUartHelpers::sendCommand(slaveType, cmd4, robustUart, uartWriteFunction);
+  // Optional debug:
+  Serial.printf("[RobustUART->RT] TX type=%u cmd=0x%02X\n", slaveType, cmd4 & 0x0F);
 }
 
 void sendAttractionCommand(uint8_t slaveType, uint8_t state) {

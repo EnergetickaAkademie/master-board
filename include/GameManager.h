@@ -359,9 +359,7 @@ private:
                     // Calculate bargraph value: 0% encoder = 0 LEDs, 100% encoder = 10 LEDs
                     // The hardware is inverted: setValue(0) = fully lit, setValue(10) = not lit
                     // So we invert: 0% → setValue(10), 100% → setValue(0)
-                    uint8_t leds = static_cast<uint8_t>(plant.powerPercentage.load() * 10);
-                    if (leds > 10) leds = 10;
-                    desiredLEDs = 10 - leds;
+                    desiredLEDs = static_cast<uint8_t>(plant.powerPercentage.load() * 10);
                 }
 
                 plant.powerBargraph->setValue(desiredLEDs);

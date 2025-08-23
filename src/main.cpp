@@ -17,6 +17,7 @@
 #include "board_config.h"
 #include "power_plant_config.h"
 #include "GameManager.h"
+#include "robust_uart.h"
 
 /* ------------------------------------------------------------------ */
 /*                             PIN MAP                                */
@@ -224,13 +225,14 @@ static const uint8_t CMD_OFF = 0x02;
 // UART communication variables
 HardwareSerial uartComm(1); // Use UART1
 unsigned long lastUartReceive = 0;
+RobustUart robustUart; // Robust UART protocol handler
 
 // Storage for connected slaves from retranslation station
 std::vector<UartSlaveInfo> connectedSlaves; // struct defined in GameManager.h
 
 // Function prototypes
 void processUartData();
-void parseSlaveInfo(uint8_t *data, size_t length);
+void uartWriteFunction(const uint8_t* data, size_t len);
 
 
 /* ------------------------------------------------------------------ */
@@ -347,74 +349,38 @@ void initUartCommunication()
 {
     // Initialize UART1 with 9600 baud rate on pins 19 (RX) and 47 (TX)
     uartComm.begin(9600, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
-    Serial.println("[UART] Communication initialized on pins RX=19, TX=47, baud=9600");
+    Serial.println("[UART] Robust communication initialized on pins RX=19, TX=47, baud=9600");
 }
 
-// Parse list of pairs [type, amount] sent by retranslation station
-void parseSlaveInfo(uint8_t *data, size_t length)
-{
-    if (length % 2 != 0)
-    {
-        Serial.println("[UART] Invalid slave info length");
-        return;
-    }
-
-    for (size_t i = 0; i < length; i += 2)
-    {
-        uint8_t type = data[i];
-        uint8_t amount = data[i + 1];
-
-        bool found = false;
-        for (auto &slave : connectedSlaves)
-        {
-            if (slave.slaveType == type)
-            {
-                slave.amount = amount;
-                found = true;
-                break;
-            }
-        }
-
-        if (!found)
-        {
-            connectedSlaves.push_back({type, amount});
-        }
-
-        // Remove entry if amount is zero
-        if (amount == 0)
-        {
-            connectedSlaves.erase(
-                std::remove_if(connectedSlaves.begin(), connectedSlaves.end(),
-                               [type](const UartSlaveInfo &s) { return s.slaveType == type; }),
-                connectedSlaves.end());
-        }
-
-        Serial.printf("[UART] Slave Type %u: %u connected\n", type, amount);
-    }
-
-    // Update GameManager with new powerplant information
-    GameManager::getInstance().updateUartPowerplants(connectedSlaves);
+// Write function for robust UART
+void uartWriteFunction(const uint8_t* data, size_t len) {
+    uartComm.write(data, len);
 }
 
 void processUartData()
 {
-    if (uartComm.available())
-    {
-        // Read all available data
-        uint8_t buffer[64];
-        size_t bytesRead = 0;
-
-        while (uartComm.available() && bytesRead < sizeof(buffer))
-        {
-            buffer[bytesRead++] = uartComm.read();
-        }
-
-        if (bytesRead > 0)
-        {
-            Serial.printf("[UART] Received %zu bytes: ", bytesRead);
-            parseSlaveInfo(buffer, bytesRead);
+    // Process incoming bytes through robust UART protocol
+    while (uartComm.available()) {
+        uint8_t byte = uartComm.read();
+        
+        if (robustUart.processByte(byte)) {
+            // Complete frame received
+            const uint8_t* payload = robustUart.getPayload();
+            uint8_t length = robustUart.getPayloadLength();
+            
+            Serial.printf("[RobustUART] Received frame: %u bytes\n", length);
+            RobustUartHelpers::parseSlaveInfo(payload, length, connectedSlaves);
+            
             lastUartReceive = millis();
+            robustUart.resetRx(); // Ready for next frame
         }
+    }
+    
+    // Print stats periodically for debugging
+    static unsigned long lastStats = 0;
+    if (millis() - lastStats >= 10000) { // Every 10 seconds
+        robustUart.printStats();
+        lastStats = millis();
     }
 }
 
