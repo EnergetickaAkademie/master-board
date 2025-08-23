@@ -247,10 +247,12 @@ ShiftRegisterChain *shiftChain = nullptr;
 
 Bargraph *bargraph1 = nullptr, *bargraph2 = nullptr,
          *bargraph3 = nullptr, *bargraph4 = nullptr,
-         *bargraph5 = nullptr, *bargraph6 = nullptr;
+         *bargraph5 = nullptr, *bargraph6 = nullptr,
+         *bargraph7 = nullptr;
 SegmentDisplay *display1 = nullptr, *display2 = nullptr,
                *display3 = nullptr, *display4 = nullptr,
-               *display5 = nullptr, *display6 = nullptr;
+               *display5 = nullptr, *display6 = nullptr,
+               *display7 = nullptr;
 Encoder *encoder1 = nullptr, *encoder2 = nullptr,
         *encoder3 = nullptr, *encoder4 = nullptr;
 
@@ -409,6 +411,9 @@ void initPeripherals()
     Serial.println("[Peripherals] Encoders initialized");
 
     shiftChain = factory.createShiftRegisterChain(LATCH_PIN, DATA_PIN, CLOCK_PIN);
+
+    bargraph7 = factory.createBargraph(shiftChain, 10);
+    display7 = factory.createSegmentDisplay(shiftChain, 4);
     bargraph6 = factory.createBargraph(shiftChain, 10);
     display6 = factory.createSegmentDisplay(shiftChain, 4);
     bargraph5 = factory.createBargraph(shiftChain, 10);
@@ -428,12 +433,14 @@ void initPeripherals()
     display4->displayNumber(8878.0, 1);
     display5->displayNumber(8878.0, 1);
     display6->displayNumber(8878.0, 1);
+    display7->displayNumber(8878.0, 1);
     bargraph1->setValue(4);
     bargraph2->setValue(5);
     bargraph3->setValue(4);
     bargraph4->setValue(5);
     bargraph5->setValue(4);
     bargraph6->setValue(4);
+    bargraph7->setValue(4);
 
     auto &gameManager = GameManager::getInstance();
 
@@ -443,6 +450,8 @@ void initPeripherals()
     gameManager.registerPowerPlantTypeControl(BATTERY,encoder4, display4, bargraph4);
     gameManager.registerPowerPlantTypeControl(WIND,   nullptr,  display5, bargraph5);
     gameManager.registerPowerPlantTypeControl(PHOTOVOLTAIC, nullptr, display6, bargraph6);
+    // Add HYDRO (unregulated -> nullptr encoder) so its contribution is calculated
+    gameManager.registerPowerPlantTypeControl(HYDRO,  nullptr,  display7, bargraph7); // reuse display7 if spare or assign a new one when hardware available
 
     // Push attraction states periodically
     factory.createPeriodic(1000, []()
@@ -536,8 +545,10 @@ void setup()
 
 void loop()
 {
-    if (WiFi.status() == WL_CONNECTED && GameManager::getInstance().updateEspApi())
-        GameManager::getInstance().updateCoefficientsFromGame();
+    // Update ESP API if connected
+    if (WiFi.status() == WL_CONNECTED) {
+        GameManager::getInstance().updateEspApi();
+    }
 
     GameManager::getInstance().update(); // update game logic
 
@@ -560,5 +571,12 @@ void loop()
         nfcRegistry.printDatabase(); // Print NFC registry info
 
         GameManager::printDebugInfo();
+        
+        // Print coefficient debug info every 10 seconds
+        static unsigned long lastCoefficientDebug = 0;
+        if (millis() - lastCoefficientDebug >= 10000) {
+            GameManager::printCoefficientDebugInfo();
+            lastCoefficientDebug = millis();
+        }
     }
 }

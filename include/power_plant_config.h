@@ -27,6 +27,20 @@
 // The GameManager will automatically update these values when the game
 // scenario changes or when new coefficients are received.
 
+// Wind powerplant configuration
+// Wind turbines are controlled by server-provided wind coefficient rather than user input.
+// The server sends maxWatts that reflects current wind conditions (base_power * wind_coefficient).
+// When calculated coefficient > WIND_COEFFICIENT_THRESHOLD, turbines will spin.
+#define WIND_COEFFICIENT_THRESHOLD 0.5f    // Minimum wind coefficient to start turbines
+#define TYPICAL_WIND_MAX_POWER 1000.0f     // Typical maximum wind power for coefficient calculation
+
+// Hydro powerplant configuration
+// Hydro turbines are controlled by server-provided hydro coefficient rather than user input.
+// The server sends maxWatts that reflects current hydro conditions (base_power * hydro_coefficient).
+// When calculated coefficient > HYDRO_COEFFICIENT_THRESHOLD, turbines will run.
+#define HYDRO_COEFFICIENT_THRESHOLD 0.5f   // Minimum hydro coefficient to start turbines  
+#define TYPICAL_HYDRO_MAX_POWER 1200.0f    // Typical maximum hydro power for coefficient calculation
+
 // Update intervals (in milliseconds)
 #define DISPLAY_UPDATE_INTERVAL_MS   100  // How often to update displays
 #define POWER_PLANT_DEBUG_INTERVAL   1000 // How often to print debug info

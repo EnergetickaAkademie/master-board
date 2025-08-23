@@ -1,4 +1,5 @@
 #include "GameManager.h"
+#include "power_plant_config.h"
 #include <ESPGameAPI.h>
 #include <Arduino.h>
 #include <math.h>
@@ -107,6 +108,16 @@ float GameManager::calculateTotalPowerForType(uint8_t slaveType) const {
                 if (uartPlant.slaveType == slaveType) {
                     // If no powerplants connected or powerplant type disabled (max = 0), return 0
                     if (uartPlant.amount == 0 || plant.maxWatts <= 0.0f) {
+                        // Debug logging for disabled plants
+                        static unsigned long lastDisabledDebug = 0;
+                        if (millis() - lastDisabledDebug > 5000) { // Debug every 5 seconds
+                            if (uartPlant.amount == 0) {
+                                Serial.printf("[POWER] Type %u: No plants connected via UART\n", slaveType);
+                            } else if (plant.maxWatts <= 0.0f) {
+                                Serial.printf("[POWER] Type %u: Plant disabled (maxWatts=%.1f)\n", slaveType, plant.maxWatts);
+                            }
+                            lastDisabledDebug = millis();
+                        }
                         return 0.0f;
                     }
 
@@ -114,7 +125,19 @@ float GameManager::calculateTotalPowerForType(uint8_t slaveType) const {
                     float powerPerPlant = computePowerPerPlant(plant);
 
                     // Total power = power per plant * number of connected plants
-                    return powerPerPlant * uartPlant.amount;
+                    float totalPower = powerPerPlant * uartPlant.amount;
+                    
+                    // Debug logging for active plants
+                    static unsigned long lastActiveDebug = 0;
+                    if (millis() - lastActiveDebug > 2000) { // Debug every 2 seconds
+                        if (totalPower != 0.0f) {
+                            Serial.printf("[POWER] Type %u: %u plants, %.1fW per plant, %.1fW total\n", 
+                                         slaveType, uartPlant.amount, powerPerPlant, totalPower);
+                        }
+                        lastActiveDebug = millis();
+                    }
+                    
+                    return totalPower;
                 }
             }
             // If no UART data for this type, return 0 (no powerplants connected)
@@ -136,7 +159,46 @@ void GameManager::updatePhotovoltaic(uint8_t slaveType, const PowerPlant& plant)
 }
 
 void GameManager::updateWind(uint8_t slaveType, const PowerPlant& plant) {
-    sendAttractionCommand(slaveType, onOffByPercent(plant));
+    // Wind powerplant control based on server-provided wind coefficient
+    // 
+    // The server sends production coefficients for wind that reflect current wind conditions.
+    // When coefficient > WIND_COEFFICIENT_THRESHOLD, wind turbines should spin.
+    // This approach allows the wind powerplant to respond to real-time wind data
+    // from the game server rather than manual user control.
+    
+    uint8_t windState = 0;
+    
+    if (espApi) {
+        float windCoefficient = getProductionCoefficientForType(SOURCE_WIND);
+        windState = (windCoefficient > WIND_COEFFICIENT_THRESHOLD) ? 1 : 0;
+        
+        // Debug output to monitor wind conditions and help tune parameters
+        static unsigned long lastWindDebug = 0;
+        if (millis() - lastWindDebug > 5000) { // Debug every 5 seconds
+            Serial.printf("[WIND] Server coefficient=%.2f, threshold=%.2f -> %s\n",
+                         windCoefficient, WIND_COEFFICIENT_THRESHOLD, 
+                         windState ? "SPINNING" : "STOPPED");
+            lastWindDebug = millis();
+        }
+        
+        if (windCoefficient == 0.0f) {
+            // No wind coefficient found or zero coefficient
+            static unsigned long lastNoDataDebug = 0;
+            if (millis() - lastNoDataDebug > 10000) { // Debug every 10 seconds
+                Serial.println("[WIND] No wind coefficient from server - turbines stopped");
+                lastNoDataDebug = millis();
+            }
+        }
+    } else {
+        // No ESP API connection - keep turbines stopped
+        static unsigned long lastNoApiDebug = 0;
+        if (millis() - lastNoApiDebug > 10000) {
+            Serial.println("[WIND] No ESP API connection - turbines stopped");
+            lastNoApiDebug = millis();
+        }
+    }
+    
+    sendAttractionCommand(slaveType, windState);
 }
 
 void GameManager::updateNuclear(uint8_t slaveType, const PowerPlant& plant) {
@@ -148,7 +210,46 @@ void GameManager::updateGas(uint8_t slaveType, const PowerPlant& plant) {
 }
 
 void GameManager::updateHydro(uint8_t slaveType, const PowerPlant& plant) {
-    sendAttractionCommand(slaveType, onOffByPercent(plant));
+    // Hydro powerplant control based on server-provided hydro coefficient
+    // 
+    // The server sends production coefficients for hydro that reflect current hydro conditions 
+    // (water flow, reservoir levels, etc.). When coefficient > HYDRO_COEFFICIENT_THRESHOLD, 
+    // hydro turbines should run. This allows the hydro powerplant to respond to real-time 
+    // water conditions from the game server rather than manual user control.
+    
+    uint8_t hydroState = 0;
+    
+    if (espApi) {
+        float hydroCoefficient = getProductionCoefficientForType(SOURCE_HYDRO);
+        hydroState = (hydroCoefficient > HYDRO_COEFFICIENT_THRESHOLD) ? 1 : 0;
+        
+        // Debug output to monitor hydro conditions and help tune parameters
+        static unsigned long lastHydroDebug = 0;
+        if (millis() - lastHydroDebug > 5000) { // Debug every 5 seconds
+            Serial.printf("[HYDRO] Server coefficient=%.2f, threshold=%.2f -> %s\n",
+                         hydroCoefficient, HYDRO_COEFFICIENT_THRESHOLD, 
+                         hydroState ? "RUNNING" : "STOPPED");
+            lastHydroDebug = millis();
+        }
+        
+        if (hydroCoefficient == 0.0f) {
+            // No hydro coefficient found or zero coefficient
+            static unsigned long lastNoDataDebug = 0;
+            if (millis() - lastNoDataDebug > 10000) { // Debug every 10 seconds
+                Serial.println("[HYDRO] No hydro coefficient from server - turbines stopped");
+                lastNoDataDebug = millis();
+            }
+        }
+    } else {
+        // No ESP API connection - keep turbines stopped
+        static unsigned long lastNoApiDebug = 0;
+        if (millis() - lastNoApiDebug > 10000) {
+            Serial.println("[HYDRO] No ESP API connection - turbines stopped");
+            lastNoApiDebug = millis();
+        }
+    }
+    
+    sendAttractionCommand(slaveType, hydroState);
 }
 
 void GameManager::updateHydroStorage(uint8_t slaveType, const PowerPlant& plant) {

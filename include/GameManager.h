@@ -88,8 +88,8 @@ struct PowerPlant {
 
 class GameManager {
 private:
-    // Maximum number of power plant types we can control locally
-    static constexpr size_t MAX_POWER_PLANTS = 6;
+    // Maximum number of power plant types we can control locally (increased to include HYDRO)
+    static constexpr size_t MAX_POWER_PLANTS = 8;
     static constexpr unsigned long ATTRACTION_UPDATE_MS = 300; // Update UART attraction states every 300ms
     
     // Array of local power plant type controllers (encoder + display)
@@ -111,6 +111,10 @@ private:
     std::atomic<float> totalConsumption;
     unsigned long lastConsumptionUpdate;
 
+    // Throttling for unified production data (ranges + coefficients)
+    unsigned long lastProductionDataRequest;
+    static constexpr unsigned long PRODUCTION_DATA_REQUEST_INTERVAL_MS = 3000; // Request both ranges & coefficients every 3 seconds
+
     // Private constructor for singleton
     GameManager() :
         powerPlantCount(0),
@@ -118,7 +122,8 @@ private:
         nfcRegistry(nullptr),
         lastUartAttractionUpdate(0),
         totalConsumption(0.0f),
-        lastConsumptionUpdate(0) {
+    lastConsumptionUpdate(0),
+    lastProductionDataRequest(0) {
         // Initialize power plants array
         for (auto& plant : powerPlants) {
             plant = PowerPlant();
@@ -148,9 +153,11 @@ public:
         if (espApi->login(username, password) && espApi->registerBoard()) {
             espApi->printStatus();
             
-            // Request initial production ranges
-            Serial.println("[GameManager] Requesting initial production ranges...");
-            requestProductionRanges();
+            // Request initial unified production data (ranges + coefficients)
+            Serial.println("[GameManager] Requesting initial production data (ranges + coefficients)...");
+            requestProductionData();
+            // Initialize throttling timer
+            lastProductionDataRequest = millis();
         } else {
             Serial.println("[GameManager] ESP-API login or registration failed");
         }
@@ -233,27 +240,53 @@ public:
     // Update ESP-API (call this in main loop)
     bool updateEspApi() {
         bool result = espApi ? espApi->update() : false;
-        
-        // If coefficients were updated, also request production ranges
+
         if (result && espApi) {
-            requestProductionRanges();
+            unsigned long now = millis();
+            if (now - lastProductionDataRequest >= PRODUCTION_DATA_REQUEST_INTERVAL_MS) {
+                requestProductionData();
+                lastProductionDataRequest = now;
+            }
         }
-        
         return result;
     }
     
     // Request production ranges from server
     void requestProductionRanges() {
         if (!espApi) return;
-        
         espApi->getProductionRanges([this](bool success, const std::vector<ProductionRange>& ranges, const std::string& error) {
             if (success) {
-                Serial.println("📊 Production ranges received from server");
-                updateCoefficientsFromGame(); // This will update both coefficients and ranges
+                updateCoefficientsFromGame(); // Update local min/max
             } else {
                 Serial.println("❌ Failed to get production ranges: " + String(error.c_str()));
             }
         });
+    }
+
+    // Request production coefficients from server
+    void requestProductionCoefficients() {
+        if (!espApi) return;
+        espApi->pollCoefficients([this](bool success, const std::string& error) {
+            if (!success) {
+                Serial.println("❌ Failed to get production coefficients: " + String(error.c_str()));
+            }
+        });
+    }
+
+    // Unified request for both ranges and coefficients
+    void requestProductionData() {
+        if (!espApi) return;
+        static unsigned long lastLogTime = 0;
+        bool logNow = (millis() - lastLogTime) > 10000;
+        if (logNow) {
+            Serial.println("� Requesting production data (ranges + coefficients)");
+        }
+        // Request ranges first so min/max are updated before coefficient-based logic uses them
+        requestProductionRanges();
+        requestProductionCoefficients();
+        if (logNow) {
+            lastLogTime = millis();
+        }
     }
 
     // Delete copy/move constructors and assignment operators
@@ -370,6 +403,20 @@ private:
 public:
 
     // Setters for game coefficients (called from API callbacks)
+    
+    // Get production coefficient for a specific plant type
+    float getProductionCoefficientForType(uint8_t plantType) const {
+        if (!espApi) return 0.0f;
+        
+        const auto& productionCoeffs = espApi->getProductionCoefficients();
+        for (const auto& coeff : productionCoeffs) {
+            if (coeff.source_id == plantType) {
+                return coeff.coefficient;
+            }
+        }
+        return 0.0f; // No coefficient found for this type
+    }
+    
     // Getters for specific plants by type
     PowerPlant* getPowerPlantByType(PowerPlantType plantType) {
         for (size_t i = 0; i < powerPlantCount; i++) {
@@ -518,10 +565,70 @@ private:
         }
     }
 
+    // Debug output for coefficients and power production (instance implementation)
+    void printCoefficientDebugInfoImpl() {
+        Serial.println("\n=== COEFFICIENT DEBUG INFO ===");
+        
+        if (!espApi) {
+            Serial.println("[ERROR] No ESP API connection");
+            return;
+        }
+        
+        // Print production coefficients
+        const auto& productionCoeffs = espApi->getProductionCoefficients();
+        Serial.printf("[COEFFICIENTS] Production coefficients (%zu total):\n", productionCoeffs.size());
+        for (const auto& coeff : productionCoeffs) {
+            const char* typeName = "UNKNOWN";
+            switch (coeff.source_id) {
+                case SOURCE_PHOTOVOLTAIC: typeName = "SOLAR"; break;
+                case SOURCE_WIND: typeName = "WIND"; break;
+                case SOURCE_NUCLEAR: typeName = "NUCLEAR"; break;
+                case SOURCE_GAS: typeName = "GAS"; break;
+                case SOURCE_HYDRO: typeName = "HYDRO"; break;
+                case SOURCE_HYDRO_STORAGE: typeName = "HYDRO_STORAGE"; break;
+                case SOURCE_COAL: typeName = "COAL"; break;
+                case SOURCE_BATTERY: typeName = "BATTERY"; break;
+            }
+            Serial.printf("  %s (ID:%u): %.3f\n", typeName, coeff.source_id, coeff.coefficient);
+        }
+        
+        // Print power production for each type
+        Serial.println("[POWER] Current power production:");
+        for (size_t i = 0; i < powerPlantCount; i++) {
+            const auto& plant = powerPlants[i];
+            uint8_t slaveType = static_cast<uint8_t>(plant.plantType);
+            float totalPower = calculateTotalPowerForType(slaveType);
+            float coefficient = getProductionCoefficientForType(slaveType);
+            
+            const char* typeName = "UNKNOWN";
+            switch (plant.plantType) {
+                case PHOTOVOLTAIC: typeName = "SOLAR"; break;
+                case WIND: typeName = "WIND"; break;
+                case NUCLEAR: typeName = "NUCLEAR"; break;
+                case GAS: typeName = "GAS"; break;
+                case HYDRO: typeName = "HYDRO"; break;
+                case HYDRO_STORAGE: typeName = "HYDRO_STORAGE"; break;
+                case COAL: typeName = "COAL"; break;
+                case BATTERY: typeName = "BATTERY"; break;
+            }
+            
+            Serial.printf("  %s: %.1fW (coeff: %.3f, range: %.1f-%.1f, percent: %.1f%%)\n",
+                         typeName, totalPower, coefficient, plant.minWatts, plant.maxWatts, 
+                         plant.powerPercentage.load() * 100.0f);
+        }
+        
+        Serial.println("=== END COEFFICIENT DEBUG ===\n");
+    }
+
 public:
     // Public static debug print that avoids exposing instance state externally
     static void printDebugInfo() {
         getInstance().printDebugInfoImpl();
+    }
+    
+    // Print coefficient and power information for debugging
+    static void printCoefficientDebugInfo() {
+        getInstance().printCoefficientDebugInfoImpl();
     }
 };
 
