@@ -75,9 +75,7 @@ void GameManager::updateAttractionStates() {
                     case COAL:         updateCoal(uartPlant.slaveType, plant); break;
                     case BATTERY:      updateBattery(uartPlant.slaveType, plant); break;
                     default: {
-                        // Generic ON/OFF: send ON if enabled (>50%), else OFF
                         uint8_t attractionState = (plant.maxWatts > 0.0f && plant.powerPercentage.load() > 0.5f) ? 1 : 0;
-                        Serial.printf("number of connected powerplants for type %u: %u\n", uartPlant.slaveType, uartPlant.amount);
                         sendAttractionCommand(uartPlant.slaveType, attractionState);
                     } break;
                 }
@@ -87,8 +85,8 @@ void GameManager::updateAttractionStates() {
         }
 
         if (!hasLocal) {
-            // No local control for this UART type: turn off attraction
-            sendAttractionCommand(uartPlant.slaveType, 0); // OFF (cmd4=0x02)
+            // No local control registered: ensure device goes OFF
+            sendAttractionCommand(uartPlant.slaveType, 0);
         }
 
         if (sentCount < sizeof(sentTypes)) sentTypes[sentCount++] = uartPlant.slaveType;

@@ -10,7 +10,7 @@ extern void uartWriteFunction(const uint8_t* data, size_t len); // Defined in ma
 void sendCmd2B(uint8_t slaveType, uint8_t cmd4) {
   RobustUartHelpers::sendCommand(slaveType, cmd4, robustUart, uartWriteFunction);
   // Optional debug:
-  Serial.printf("[RobustUART->RT] TX type=%u cmd=0x%02X\n", slaveType, cmd4 & 0x0F);
+  //Serial.printf("[RobustUART->RT] TX type=%u cmd=0x%02X\n", slaveType, cmd4 & 0x0F);
 }
 
 void sendAttractionCommand(uint8_t slaveType, uint8_t state) {

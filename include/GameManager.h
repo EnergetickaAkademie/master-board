@@ -90,7 +90,7 @@ class GameManager {
 private:
     // Maximum number of power plant types we can control locally
     static constexpr size_t MAX_POWER_PLANTS = 7;
-    static constexpr unsigned long ATTRACTION_UPDATE_MS = 300; // Update UART attraction states every 300ms
+    static constexpr unsigned long ATTRACTION_UPDATE_MS = 25;
     
     // Array of local power plant type controllers (encoder + display)
     // The actual count of powerplants comes from UART
