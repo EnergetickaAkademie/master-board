@@ -51,8 +51,76 @@ std::vector<ConnectedConsumer> GameManager::getConnectedConsumers() {
 }
 
 void GameManager::updateUartPowerplants(const std::vector<UartSlaveInfo>& powerplants) {
-    uartPowerplants = powerplants;
-    // (optionally trigger an immediate attraction refresh here)
+    // For each incoming powerplant record decide whether it's an increase (apply immediately)
+    // or decrease (stage with grace) relative to current uartPowerplants snapshot.
+    // Build a map of current amounts.
+    auto now = millis();
+    // Helper lambda to find current amount
+    auto findCurrentAmount = [this](uint8_t type) -> int {
+        for (const auto &p : uartPowerplants) if (p.slaveType == type) return p.amount; return -1; };
+
+    // Process each reported type
+    for (const auto &incoming : powerplants) {
+        int current = findCurrentAmount(incoming.slaveType);
+        if (current < 0) {
+            // New type appears or first report -> add immediately
+            uartPowerplants.push_back(incoming);
+            Serial.printf("[UART] Type %u initial amount=%u\n", incoming.slaveType, incoming.amount);
+            // Remove any stale pending decrease for this type (no longer relevant)
+            pendingDecreases.erase(std::remove_if(pendingDecreases.begin(), pendingDecreases.end(), [&](const PendingDecrease &pd){return pd.slaveType==incoming.slaveType;}), pendingDecreases.end());
+            continue;
+        }
+        if (incoming.amount > current) {
+            // Increase -> apply immediately, cancel any pending decrease
+            for (auto &p : uartPowerplants) if (p.slaveType == incoming.slaveType) { p.amount = incoming.amount; break; }
+            pendingDecreases.erase(std::remove_if(pendingDecreases.begin(), pendingDecreases.end(), [&](const PendingDecrease &pd){return pd.slaveType==incoming.slaveType;}), pendingDecreases.end());
+            Serial.printf("[UART] Type %u amount increased %d -> %u (applied immediately)\n", incoming.slaveType, current, incoming.amount);
+        } else if (incoming.amount < current) {
+            // Decrease -> stage: if already pending with same target refresh timer else create
+            bool foundPending = false;
+            for (auto &pd : pendingDecreases) {
+                if (pd.slaveType == incoming.slaveType) {
+                    if (pd.targetAmount != incoming.amount) {
+                        pd.targetAmount = incoming.amount;
+                        pd.firstSeen = now; // restart timer for new lower target
+                        Serial.printf("[UART] Type %u decrease updated pending %u -> %u (timer reset)\n", incoming.slaveType, current, incoming.amount);
+                    } else {
+                        // Same target observed again -> keep timer (optionally refresh if we want stronger confirmation)
+                    }
+                    foundPending = true;
+                    break;
+                }
+            }
+            if (!foundPending) {
+                PendingDecrease pd{incoming.slaveType, incoming.amount, now, (uint8_t)current};
+                pendingDecreases.push_back(pd);
+                Serial.printf("[UART] Type %u decrease staged %d -> %u (grace %lums)\n", incoming.slaveType, current, incoming.amount, DECREASE_GRACE_MS);
+            }
+        } else {
+            // Same amount; no change. Could clear pending decreases if any were for this target beyond it? We keep them; stable amount doesn't confirm decrease.
+        }
+    }
+
+    // Also prune types that disappeared entirely from the report (treat as potential zero w/ grace)
+    for (const auto &existing : uartPowerplants) {
+        bool seen = false;
+        for (const auto &inc : powerplants) if (inc.slaveType == existing.slaveType) { seen = true; break; }
+        if (!seen) {
+            // Not reported this cycle -> treat as potential disconnect (target 0) if not already 0 or pending.
+            if (existing.amount > 0) {
+                bool alreadyPending = false;
+                for (auto &pd : pendingDecreases) if (pd.slaveType == existing.slaveType && pd.targetAmount==0) { alreadyPending = true; break; }
+                if (!alreadyPending) {
+                    PendingDecrease pd{existing.slaveType, 0, now, existing.amount};
+                    pendingDecreases.push_back(pd);
+                    Serial.printf("[UART] Type %u missing from report -> staged disconnect %u -> 0 (grace %lums)\n", existing.slaveType, existing.amount, DECREASE_GRACE_MS);
+                }
+            }
+        }
+    }
+
+    // Apply any pending decreases whose timers expired
+    applyPendingDecreases();
 }
 
 void GameManager::updateAttractionStates() {
@@ -60,6 +128,9 @@ void GameManager::updateAttractionStates() {
     if (millis() - lastUartAttractionUpdate < ATTRACTION_UPDATE_MS) {
         return;
     }
+
+    // Ensure any elapsed pending decreases are applied before sending attraction commands
+    applyPendingDecreases();
 
     // Track which types we already sent for (avoid duplicates)
     uint8_t sentTypes[16];
@@ -389,4 +460,23 @@ float GameManager::computePowerPerPlant(const PowerPlant& plant) const {
     }
 
     return value;
+}
+
+void GameManager::applyPendingDecreases() {
+    if (pendingDecreases.empty()) return;
+    auto now = millis();
+    bool anyApplied = false;
+    pendingDecreases.erase(std::remove_if(pendingDecreases.begin(), pendingDecreases.end(), [&](const PendingDecrease &pd){
+        if (now - pd.firstSeen >= DECREASE_GRACE_MS) {
+            // Commit decrease
+            for (auto &p : uartPowerplants) if (p.slaveType == pd.slaveType) { p.amount = pd.targetAmount; break; }
+            Serial.printf("[UART] Type %u decrease applied after grace: %u -> %u\n", pd.slaveType, pd.originalAmount, pd.targetAmount);
+            anyApplied = true;
+            return true; // remove from pending
+        }
+        return false; // keep
+    }), pendingDecreases.end());
+    if (anyApplied) {
+        // Optional: could trigger immediate attraction update, but caller usually handles.
+    }
 }

@@ -105,6 +105,15 @@ private:
     
     // UART Powerplant tracking
     std::vector<UartSlaveInfo> uartPowerplants;
+    // Pending decreases (including disconnects) awaiting grace timeout before committing
+    struct PendingDecrease {
+        uint8_t slaveType;        // Type identifier
+        uint8_t targetAmount;     // Amount we will switch to after grace
+        unsigned long firstSeen;  // When this pending decrease was first observed
+        uint8_t originalAmount;   // Amount before decrease (for debug)
+    };
+    std::vector<PendingDecrease> pendingDecreases;
+    static constexpr unsigned long DECREASE_GRACE_MS = 500; // Grace period before applying a decrease / disconnect
     unsigned long lastUartAttractionUpdate;
     
     // Consumption tracking
@@ -522,6 +531,8 @@ public:
     float calculateTotalPowerForType(uint8_t slaveType) const;
     // Compute power per plant with center snap for symmetric ranges
     float computePowerPerPlant(const PowerPlant& plant) const;
+    // Apply any pending decreases whose grace timeout expired
+    void applyPendingDecreases();
 
 private:
     // Per-type periodic update hooks (called from updateAttractionStates)
