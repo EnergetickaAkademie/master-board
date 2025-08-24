@@ -61,6 +61,10 @@ void GameManager::updateUartPowerplants(const std::vector<UartSlaveInfo>& powerp
 
     // Process each reported type
     for (const auto &incoming : powerplants) {
+        if (!isValidSlaveType(incoming.slaveType)) {
+            Serial.printf("[UART] Ignoring invalid slave type %u (amount=%u)\n", incoming.slaveType, incoming.amount);
+            continue;
+        }
         int current = findCurrentAmount(incoming.slaveType);
         if (current < 0) {
             // New type appears or first report -> add immediately
@@ -103,6 +107,7 @@ void GameManager::updateUartPowerplants(const std::vector<UartSlaveInfo>& powerp
 
     // Also prune types that disappeared entirely from the report (treat as potential zero w/ grace)
     for (const auto &existing : uartPowerplants) {
+        if (!isValidSlaveType(existing.slaveType)) continue; // will purge later
         bool seen = false;
         for (const auto &inc : powerplants) if (inc.slaveType == existing.slaveType) { seen = true; break; }
         if (!seen) {
@@ -121,6 +126,7 @@ void GameManager::updateUartPowerplants(const std::vector<UartSlaveInfo>& powerp
 
     // Apply any pending decreases whose timers expired
     applyPendingDecreases();
+    purgeInvalidUartPowerplants();
 }
 
 void GameManager::updateAttractionStates() {
@@ -139,6 +145,7 @@ void GameManager::updateAttractionStates() {
     // Handle all types reported via UART first
     for (const auto& uartPlant : uartPowerplants) {
         if (uartPlant.amount == 0) continue;
+        if (!isValidSlaveType(uartPlant.slaveType)) continue; // skip invalid type 0 etc.
 
         bool hasLocal = false;
         for (size_t i = 0; i < powerPlantCount; i++) {
@@ -175,6 +182,7 @@ void GameManager::updateAttractionStates() {
 }
 
 float GameManager::calculateTotalPowerForType(uint8_t slaveType) const {
+    if (!isValidSlaveType(slaveType)) return 0.0f;
     // Find the corresponding local powerplant controller for this type
     for (size_t i = 0; i < powerPlantCount; i++) {
         if (static_cast<uint8_t>(powerPlants[i].plantType) == slaveType) {
@@ -478,5 +486,15 @@ void GameManager::applyPendingDecreases() {
     }), pendingDecreases.end());
     if (anyApplied) {
         // Optional: could trigger immediate attraction update, but caller usually handles.
+    }
+}
+
+void GameManager::purgeInvalidUartPowerplants() {
+    if (uartPowerplants.empty()) return;
+    size_t before = uartPowerplants.size();
+    uartPowerplants.erase(std::remove_if(uartPowerplants.begin(), uartPowerplants.end(), [&](const UartSlaveInfo &p){ return !isValidSlaveType(p.slaveType); }), uartPowerplants.end());
+    size_t removed = before - uartPowerplants.size();
+    if (removed) {
+        Serial.printf("[UART] Purged %zu invalid slave type entries\n", removed);
     }
 }
