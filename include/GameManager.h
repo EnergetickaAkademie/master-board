@@ -535,9 +535,6 @@ public:
     void applyPendingDecreases();
     // Helper to validate recognized UART slave type (1..8) matching PowerPlantType enum values
     static inline bool isValidSlaveType(uint8_t t) { return t >= PHOTOVOLTAIC && t <= BATTERY; }
-    void purgeInvalidUartPowerplants();
-    // Helper: validate recognized slave type (1..8)
-    static inline bool isValidSlaveType(uint8_t t) { return t >= PHOTOVOLTAIC && t <= BATTERY; }
     // Purge any invalid entries from uartPowerplants
     void purgeInvalidUartPowerplants();
 

@@ -12,7 +12,6 @@
 #include <SPI.h>
 #include <MFRC522.h>
 #include <NFCBuildingRegistry.h>
-#include <com-prot.h>
 
 #include "board_config.h"
 #include "power_plant_config.h"
@@ -28,20 +27,27 @@
 #define LATCH_PIN 16 // Shift register latch
 #define DATA_PIN 17  // Shift register data
 
-#define ENCODER1_PIN_A 4
-#define ENCODER1_PIN_B 5
-#define ENCODER1_PIN_SW 6
-#define ENCODER2_PIN_A 10
-#define ENCODER2_PIN_B 11
-#define ENCODER2_PIN_SW 12
+// Original logical encoder numbering changed to match new physical layout:
+// User mapping provided:
+//   logical 1 -> old physical encoder 3 (pins 13,14)
+//   logical 2 -> old physical encoder 1 (pins 4,5)
+//   logical 3 -> old physical encoder 4 (pins 7,8)
+//   logical 4 -> old physical encoder 2 (pins 10,11)
+//   logical 5 (new) -> pins 15,16 (NOTE: 16 currently used by LATCH_PIN -> needs confirmation)
 
-/* Future power plant encoders - pins reserved but not currently used */
-#define ENCODER3_PIN_A 13
-#define ENCODER3_PIN_B 14
-#define ENCODER3_PIN_SW 15
-#define ENCODER4_PIN_A 7
-#define ENCODER4_PIN_B 8
-#define ENCODER4_PIN_SW 9
+#define ENCODER1_PIN_A 13
+#define ENCODER1_PIN_B 14
+#define ENCODER2_PIN_A 4
+#define ENCODER2_PIN_B 5
+#define ENCODER3_PIN_A 7
+#define ENCODER3_PIN_B 8
+#define ENCODER4_PIN_A 10
+#define ENCODER4_PIN_B 11
+#define ENCODER5_PIN_A 15
+#define ENCODER5_PIN_B 6 // ⚠ Potential conflict: also defined as LATCH_PIN. Confirm before using.
+
+// We disable encoder button functionality by using sentinel value 255 for all
+#define ENCODER_NO_BUTTON 255
 
 /* Unused pins for future expansion */
 #define NFC_SCK_PIN 40
@@ -254,7 +260,8 @@ SegmentDisplay *display1 = nullptr, *display2 = nullptr,
                *display5 = nullptr, *display6 = nullptr,
                *display7 = nullptr;
 Encoder *encoder1 = nullptr, *encoder2 = nullptr,
-        *encoder3 = nullptr, *encoder4 = nullptr;
+        *encoder3 = nullptr, *encoder4 = nullptr,
+        *encoder5 = nullptr; // Newly added encoder
 
 MFRC522 mfrc522(NFC_SS_PIN, NFC_RST_PIN);
 NFCBuildingRegistry nfcRegistry(&mfrc522);
@@ -393,21 +400,27 @@ void processUartData()
 void initPeripherals()
 {
     /* ---------- Peripherals ---------- */
+    // Create encoders with remapped physical positions; button disabled (255)
     encoder1 = factory.createEncoder(ENCODER1_PIN_B, ENCODER1_PIN_A,
-                                     ENCODER1_PIN_SW, 0, 1000, 1);
-    Serial.println("[Peripherals] Encoder 1 created");
+                                     ENCODER_NO_BUTTON, 0, 1000, 1);
+    Serial.println("[Peripherals] Encoder 1 (phys old 3) created");
     encoder2 = factory.createEncoder(ENCODER2_PIN_B, ENCODER2_PIN_A,
-                                     ENCODER2_PIN_SW, 0, 1000, 1);
+                                     ENCODER_NO_BUTTON, 0, 1000, 1);
     encoder3 = factory.createEncoder(ENCODER3_PIN_B, ENCODER3_PIN_A,
-                                     ENCODER3_PIN_SW, 0, 1000, 1);
+                                     ENCODER_NO_BUTTON, 0, 1000, 1);
     encoder4 = factory.createEncoder(ENCODER4_PIN_B, ENCODER4_PIN_A,
-                                     ENCODER4_PIN_SW, 0, 1000, 1);
-    Serial.println("[Peripherals] Encoder 3 created");
-    Serial.println("[Peripherals] Encoder 2 created");
+                                     ENCODER_NO_BUTTON, 0, 1000, 1);
+    encoder5 = factory.createEncoder(ENCODER5_PIN_B, ENCODER5_PIN_A,
+                                     ENCODER_NO_BUTTON, 0, 1000, 1);
+    Serial.println("[Peripherals] Encoder 2 (phys old 1) created");
+    Serial.println("[Peripherals] Encoder 3 (phys old 4) created");
+    Serial.println("[Peripherals] Encoder 4 (phys old 2) created");
+    Serial.println("[Peripherals] Encoder 5 (new) created");
     encoder1->setValue(500); // 50%
     encoder2->setValue(500); // 50%
     encoder3->setValue(500); // 50%
     encoder4->setValue(500); // 50%
+    encoder5->setValue(500); // 50%
     Serial.println("[Peripherals] Encoders initialized");
 
     shiftChain = factory.createShiftRegisterChain(LATCH_PIN, DATA_PIN, CLOCK_PIN);
@@ -433,13 +446,14 @@ void initPeripherals()
     display5->displayNumber(8878.0, 1);
     display6->displayNumber(8878.0, 1);
     display7->displayNumber(8878.0, 1);
-    bargraph1->setValue(4);
-    bargraph2->setValue(5);
-    bargraph3->setValue(4);
-    bargraph4->setValue(5);
-    bargraph5->setValue(4);
-    bargraph6->setValue(4);
-    bargraph7->setValue(4);
+    bargraph1->setValue(10);
+    bargraph2->setValue(10);
+    bargraph3->setValue(10);
+    bargraph4->setValue(10);
+    bargraph5->setValue(10);
+    bargraph6->setValue(10);
+    bargraph7->setValue(10);
+    factory.update();
 
     auto &gameManager = GameManager::getInstance();
 
@@ -448,10 +462,9 @@ void initPeripherals()
     gameManager.registerPowerPlantTypeControl(NUCLEAR,encoder3, display3, bargraph3);
     gameManager.registerPowerPlantTypeControl(BATTERY,encoder4, display4, bargraph4);
     gameManager.registerPowerPlantTypeControl(HYDRO_STORAGE, encoder4, display4, bargraph4); // Share with battery
-    gameManager.registerPowerPlantTypeControl(WIND,   nullptr,  display5, bargraph5);
-    gameManager.registerPowerPlantTypeControl(PHOTOVOLTAIC, nullptr, display6, bargraph6);
-    gameManager.registerPowerPlantTypeControl(HYDRO,  nullptr,  display7, bargraph7);
-
+    gameManager.registerPowerPlantTypeControl(HYDRO,  encoder5,  display5, bargraph5);
+    gameManager.registerPowerPlantTypeControl(WIND,   nullptr,  display6, bargraph6);
+    gameManager.registerPowerPlantTypeControl(PHOTOVOLTAIC, nullptr, display7, bargraph7);
     // Push attraction states periodically
     factory.createPeriodic(1000, []()
     { GameManager::getInstance().updateAttractionStates(); });
@@ -472,6 +485,9 @@ void setup()
 {
     Serial.begin(115200);
     Serial.println("\nMaster Board ESP32-S3 booting…");
+    pinMode(BUZZER_PIN, OUTPUT);
+    digitalWrite(BUZZER_PIN, LOW);
+    initPeripherals();
 
     if (connectToWiFi())
     {
@@ -507,7 +523,6 @@ void setup()
         Serial.println("[ESP-API] Skipped due to WiFi connection failure");
     }
 
-    initPeripherals();
 
     // ---------- UART Communication Initialization ----------
     initUartCommunication();
