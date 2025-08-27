@@ -33,7 +33,7 @@
 //   logical 2 -> old physical encoder 1 (pins 4,5)
 //   logical 3 -> old physical encoder 4 (pins 7,8)
 //   logical 4 -> old physical encoder 2 (pins 10,11)
-//   logical 5 (new) -> pins 15,16 (NOTE: 16 currently used by LATCH_PIN -> needs confirmation)
+//   logical 5 (new) -> pins 15,6 for most boards, pins 12,9 for masterboard-005
 
 #define ENCODER1_PIN_A 13
 #define ENCODER1_PIN_B 14
@@ -43,8 +43,10 @@
 #define ENCODER3_PIN_B 8
 #define ENCODER4_PIN_A 10
 #define ENCODER4_PIN_B 11
+// Encoder 5 pins - different for masterboard-005
 #define ENCODER5_PIN_A 15
-#define ENCODER5_PIN_B 6 // ⚠ Potential conflict: also defined as LATCH_PIN. Confirm before using.
+#define ENCODER5_PIN_B 6
+
 
 // We disable encoder button functionality by using sentinel value 255 for all
 #define ENCODER_NO_BUTTON 255
@@ -259,6 +261,9 @@ SegmentDisplay *display1 = nullptr, *display2 = nullptr,
                *display3 = nullptr, *display4 = nullptr,
                *display5 = nullptr, *display6 = nullptr,
                *display7 = nullptr;
+// Double displays for totals
+SegmentDisplay *productionTotalDisplay = nullptr;
+SegmentDisplay *consumptionTotalDisplay = nullptr;
 Encoder *encoder1 = nullptr, *encoder2 = nullptr,
         *encoder3 = nullptr, *encoder4 = nullptr,
         *encoder5 = nullptr; // Newly added encoder
@@ -424,6 +429,11 @@ void initPeripherals()
     Serial.println("[Peripherals] Encoders initialized");
 
     shiftChain = factory.createShiftRegisterChain(LATCH_PIN, DATA_PIN, CLOCK_PIN);
+
+
+    // Create double displays for production and consumption totals (8 digits each)
+    productionTotalDisplay = factory.createSegmentDisplay(shiftChain, 8);
+    consumptionTotalDisplay = factory.createSegmentDisplay(shiftChain, 8);
     bargraph7 = factory.createBargraph(shiftChain, 10);
     display7 = factory.createSegmentDisplay(shiftChain, 4);
     bargraph6 = factory.createBargraph(shiftChain, 10);
@@ -446,6 +456,9 @@ void initPeripherals()
     display5->displayNumber(8878.0, 1);
     display6->displayNumber(8878.0, 1);
     display7->displayNumber(8878.0, 1);
+    // Initialize double displays with test pattern (8 digits: 88888878)
+    productionTotalDisplay->displayNumber(88888878.0, 1);
+    consumptionTotalDisplay->displayNumber(88888878.0, 1);
     bargraph1->setValue(10);
     bargraph2->setValue(10);
     bargraph3->setValue(10);
@@ -465,6 +478,9 @@ void initPeripherals()
     gameManager.registerPowerPlantTypeControl(HYDRO,  encoder5,  display5, bargraph5);
     gameManager.registerPowerPlantTypeControl(WIND,   nullptr,  display6, bargraph6);
     gameManager.registerPowerPlantTypeControl(PHOTOVOLTAIC, nullptr, display7, bargraph7);
+    // Set total displays for production and consumption
+    gameManager.setTotalDisplays(productionTotalDisplay, consumptionTotalDisplay);
+    Serial.println("[Peripherals] Total displays for production and consumption initialized");
     // Push attraction states periodically
     factory.createPeriodic(1000, []()
     { GameManager::getInstance().updateAttractionStates(); });

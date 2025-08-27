@@ -120,6 +120,10 @@ private:
     std::atomic<float> totalConsumption;
     unsigned long lastConsumptionUpdate;
 
+    // Total displays for production and consumption
+    SegmentDisplay* productionTotalDisplay;
+    SegmentDisplay* consumptionTotalDisplay;
+
     // Throttling for server requests
     unsigned long lastRequestTime;
     static constexpr unsigned long REQUEST_INTERVAL_MS = 3000; // Request both coefficients and ranges every 3 seconds
@@ -132,6 +136,8 @@ private:
         lastUartAttractionUpdate(0),
         totalConsumption(0.0f),
         lastConsumptionUpdate(0),
+        productionTotalDisplay(nullptr),
+        consumptionTotalDisplay(nullptr),
         lastRequestTime(0) {
         // Initialize power plants array
         for (auto& plant : powerPlants) {
@@ -444,6 +450,17 @@ private:
                 plant.powerBargraph->setValue(desiredLEDs);
             }
         }
+        
+        // Update total displays
+        if (productionTotalDisplay) {
+            float totalProduction = getTotalProduction();
+            productionTotalDisplay->displayNumber(totalProduction, 1);
+        }
+        
+        if (consumptionTotalDisplay) {
+            float totalConsumption = getTotalConsumption();
+            consumptionTotalDisplay->displayNumber(totalConsumption, 1);
+        }
     }
 
 public:
@@ -511,6 +528,13 @@ public:
     void initNfcRegistry(NFCBuildingRegistry* registry) {
         nfcRegistry = registry;
         Serial.println("[GameManager] NFC Building Registry initialized");
+    }
+
+    // Set total displays for production and consumption
+    void setTotalDisplays(SegmentDisplay* productionDisplay, SegmentDisplay* consumptionDisplay) {
+        productionTotalDisplay = productionDisplay;
+        consumptionTotalDisplay = consumptionDisplay;
+        Serial.println("[GameManager] Total displays set for production and consumption");
     }
 
     // Get count of power plants
