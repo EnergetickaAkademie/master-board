@@ -35,17 +35,17 @@
 //   logical 4 -> old physical encoder 2 (pins 10,11)
 //   logical 5 (new) -> pins 15,6 for most boards, pins 12,9 for masterboard-005
 
-#define ENCODER1_PIN_A 13
-#define ENCODER1_PIN_B 14
-#define ENCODER2_PIN_A 4
-#define ENCODER2_PIN_B 5
-#define ENCODER3_PIN_A 7
-#define ENCODER3_PIN_B 8
-#define ENCODER4_PIN_A 10
-#define ENCODER4_PIN_B 11
+#define ENCODER1_PIN_A 14
+#define ENCODER1_PIN_B 13
+#define ENCODER2_PIN_A 5
+#define ENCODER2_PIN_B 4
+#define ENCODER3_PIN_A 8
+#define ENCODER3_PIN_B 7
+#define ENCODER4_PIN_A 11
+#define ENCODER4_PIN_B 10
 // Encoder 5 pins - different for masterboard-005
-#define ENCODER5_PIN_A 15
-#define ENCODER5_PIN_B 6
+#define ENCODER5_PIN_A 6
+#define ENCODER5_PIN_B 15
 
 
 // We disable encoder button functionality by using sentinel value 255 for all
