@@ -34,7 +34,7 @@
 //   logical 3 -> old physical encoder 4 (pins 7,8)
 //   logical 4 -> old physical encoder 2 (pins 10,11)
 //   logical 5 (new) -> pins 15,6 for most boards, pins 12,9 for masterboard-005
-
+hw_timer_t *displayTimer = nullptr;
 #define ENCODER1_PIN_A 14
 #define ENCODER1_PIN_B 13
 #define ENCODER2_PIN_A 5
@@ -485,21 +485,23 @@ void initPeripherals()
     gameManager.setTotalDisplays(productionTotalDisplay, consumptionTotalDisplay);
     Serial.println("[Peripherals] Total displays for production and consumption initialized");
     // Push attraction states periodically
-    factory.createPeriodic(1000, []()
+    factory.createPeriodic(500, []()
     { GameManager::getInstance().updateAttractionStates(); });
 }
 
 TaskHandle_t ioTaskHandle = nullptr;
-void ioTask(void *)
-{
-    for (;;)
-    {
-        GameManager::updateDisplays();
-        factory.update();
-        vTaskDelay(1); // ~1kHz
-    }
+
+void IRAM_ATTR onDisplayTimer() {
+    GameManager::updateDisplays();
+    factory.update();
 }
 
+void initDisplayTimer() {
+    displayTimer = timerBegin(0, 80, true);       // 1 MHz
+    timerAttachInterrupt(displayTimer, &onDisplayTimer, true);
+    timerAlarmWrite(displayTimer, 1000, true);    // 1 kHz
+    timerAlarmEnable(displayTimer);
+}
 void setup()
 {
     Serial.begin(115200);
@@ -561,15 +563,8 @@ void setup()
 
     Serial.printf("[COM-PROT] Master (via retranslation) UART on RX=%d, TX=%d\n", UART_RX_PIN, UART_TX_PIN);
     Serial.println("Setup done ✓");
-
-    xTaskCreatePinnedToCore(
-        ioTask,  // task function
-        "IO",    // name
-        4096,    // stack bytes
-        nullptr, // param
-        1,       // priority
-        &ioTaskHandle,
-        1);
+    initDisplayTimer();
+   
 }
 
 /* ------------------------------------------------------------------ */
