@@ -434,29 +434,32 @@ private:
                 plant.powerBargraph->setEnabled(shouldEnable);
             }
             
-            // Debug output for display state changes (throttled)
+            // Debug output for display state changes (throttled) - disabled to save stack space
+            /*
             static unsigned long lastDisplayDebug = 0;
             static bool lastState[8] = {false}; // Track last state for each plant type
             if (millis() - lastDisplayDebug > 5000 && i < 8) { // Debug every 5 seconds
                 if (lastState[i] != shouldEnable) {
-                    Serial.printf("[DISPLAY] Plant type %d (%s): %s (coeff=%.3f)\n", 
-                                 static_cast<int>(plant.plantType),
-                                 (plant.plantType == COAL ? "COAL" :
-                                  plant.plantType == GAS ? "GAS" :
-                                  plant.plantType == NUCLEAR ? "NUCLEAR" :
-                                  plant.plantType == BATTERY ? "BATTERY" :
-                                  plant.plantType == HYDRO_STORAGE ? "HYDRO_STORAGE" :
-                                  plant.plantType == HYDRO ? "HYDRO" :
-                                  plant.plantType == WIND ? "WIND" :
-                                  plant.plantType == PHOTOVOLTAIC ? "PHOTOVOLTAIC" : "UNKNOWN"),
-                                 shouldEnable ? "ENABLED" : "DISABLED",
-                                 coefficient);
+                    const char* typeName = "UNK";
+                    switch (plant.plantType) {
+                        case COAL: typeName = "COAL"; break;
+                        case GAS: typeName = "GAS"; break;
+                        case NUCLEAR: typeName = "NUCLEAR"; break;
+                        case BATTERY: typeName = "BATTERY"; break;
+                        case HYDRO_STORAGE: typeName = "HYDRO_STORAGE"; break;
+                        case HYDRO: typeName = "HYDRO"; break;
+                        case WIND: typeName = "WIND"; break;
+                        case PHOTOVOLTAIC: typeName = "PHOTOVOLTAIC"; break;
+                    }
+                    Serial.printf("[DISPLAY] %s: %s (%.3f)\n", 
+                                 typeName, shouldEnable ? "ON" : "OFF", coefficient);
                     lastState[i] = shouldEnable;
                 }
                 if (i == powerPlantCount - 1) { // Reset timer on last plant
                     lastDisplayDebug = millis();
                 }
             }
+            */
             
             // Skip further updates if disabled
             if (!shouldEnable) {

@@ -587,7 +587,7 @@ void setup()
     Serial.printf("[COM-PROT] Master (via retranslation) UART on RX=%d, TX=%d\n", UART_RX_PIN, UART_TX_PIN);
     Serial.println("Setup done ✓");
     initDisplayTimer();
-    xTaskCreatePinnedToCore(displayTask, "DisplayTask", 2048, NULL, 1, &ioTaskHandle, 1);
+    xTaskCreatePinnedToCore(displayTask, "DisplayTask", 4096, NULL, 1, &ioTaskHandle, 1);
 }
 
 /* ------------------------------------------------------------------ */
