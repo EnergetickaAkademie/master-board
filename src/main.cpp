@@ -47,7 +47,6 @@ hw_timer_t *displayTimer = nullptr;
 #define ENCODER5_PIN_A 6
 #define ENCODER5_PIN_B 15
 
-
 // We disable encoder button functionality by using sentinel value 255 for all
 #define ENCODER_NO_BUTTON 255
 
@@ -60,7 +59,7 @@ hw_timer_t *displayTimer = nullptr;
 #define COMPROT_PIN 19
 
 /* UART Communication with Retranslation Station */
-#define UART_RX_PIN  19//
+#define UART_RX_PIN 19 //
 #define UART_TX_PIN 47
 
 /* ------------------------------------------------------------------ */
@@ -101,7 +100,7 @@ IPAddress findHttpServer()
     uint32_t hostsScanned = 0;
 
     // First try common server IPs
-    uint8_t commonHosts[] = {2,5, 6, 210, 11, 100, 105, 105, 106, 106, 101, 106, 200, 201, 4, 5, 7, 8, 9, 10, 12, 13, 14, 105, 15, 3, 106, 106, 106};
+    uint8_t commonHosts[] = {2, 5, 6, 210, 11, 100, 105, 105, 106, 106, 101, 106, 200, 201, 4, 5, 7, 8, 9, 10, 12, 13, 14, 105, 15, 3, 106, 106, 106};
     for (uint8_t host : commonHosts)
     {
         IPAddress target(subnet[0], subnet[1], subnet[2], host);
@@ -227,7 +226,7 @@ IPAddress findServerByBroadcast()
 */
 
 // 4-bit command constants (optional helpers)
-static const uint8_t CMD_ON  = 0x01;
+static const uint8_t CMD_ON = 0x01;
 static const uint8_t CMD_OFF = 0x02;
 
 // UART communication variables
@@ -240,8 +239,7 @@ std::vector<UartSlaveInfo> connectedSlaves; // struct defined in GameManager.h
 
 // Function prototypes
 void processUartData();
-void uartWriteFunction(const uint8_t* data, size_t len);
-
+void uartWriteFunction(const uint8_t *data, size_t len);
 
 /* ------------------------------------------------------------------ */
 /*                    GLOBAL STATE & FORWARD DECLS                    */
@@ -280,30 +278,38 @@ void printWiFiStatusCode(wl_status_t status)
     switch (status)
     {
     case WL_IDLE_STATUS:
-        Serial.print("Idle"); break;
+        Serial.print("Idle");
+        break;
     case WL_NO_SSID_AVAIL:
-        Serial.print("No SSID Available"); break;
+        Serial.print("No SSID Available");
+        break;
     case WL_SCAN_COMPLETED:
-        Serial.print("Scan Completed"); break;
+        Serial.print("Scan Completed");
+        break;
     case WL_CONNECTED:
-        Serial.print("Connected"); break;
+        Serial.print("Connected");
+        break;
     case WL_CONNECT_FAILED:
-        Serial.print("Connection Failed"); break;
+        Serial.print("Connection Failed");
+        break;
     case WL_CONNECTION_LOST:
-        Serial.print("Connection Lost"); break;
+        Serial.print("Connection Lost");
+        break;
     case WL_DISCONNECTED:
-        Serial.print("Disconnected"); break;
+        Serial.print("Disconnected");
+        break;
     default:
-        Serial.print("Unknown Status"); break;
+        Serial.print("Unknown Status");
+        break;
     }
 }
 
 bool connectToWiFi()
 {
-    //const char *ssid = "PotkaniNora";
-    //const char *password = "PrimaryPapikTarget";
-    const char *ssid = "Bagr";
-    const char *password = "bagroviste";
+    const char *ssid = "PotkaniNora";
+    const char *password = "PrimaryPapikTarget";
+    // const char *ssid = "Bagr";
+    // const char *password = "bagroviste";
 
     const int max_connection_attempts = 10;
 
@@ -327,13 +333,17 @@ bool connectToWiFi()
         switch (WiFi.status())
         {
         case WL_NO_SSID_AVAIL:
-            Serial.print(" [SSID not found]"); break;
+            Serial.print(" [SSID not found]");
+            break;
         case WL_CONNECT_FAILED:
-            Serial.print(" [Connection failed]"); break;
+            Serial.print(" [Connection failed]");
+            break;
         case WL_CONNECTION_LOST:
-            Serial.print(" [Connection lost]"); break;
+            Serial.print(" [Connection lost]");
+            break;
         case WL_DISCONNECTED:
-            Serial.print(" [Disconnected]"); break;
+            Serial.print(" [Disconnected]");
+            break;
         }
     }
 
@@ -370,32 +380,36 @@ void initUartCommunication()
 }
 
 // Write function for robust UART
-void uartWriteFunction(const uint8_t* data, size_t len) {
+void uartWriteFunction(const uint8_t *data, size_t len)
+{
     uartComm.write(data, len);
 }
 
 void processUartData()
 {
     // Process incoming bytes through robust UART protocol
-    while (uartComm.available()) {
+    while (uartComm.available())
+    {
         uint8_t byte = uartComm.read();
-        
-        if (robustUart.processByte(byte)) {
+
+        if (robustUart.processByte(byte))
+        {
             // Complete frame received
-            const uint8_t* payload = robustUart.getPayload();
+            const uint8_t *payload = robustUart.getPayload();
             uint8_t length = robustUart.getPayloadLength();
-            
+
             Serial.printf("[RobustUART] Received frame: %u bytes\n", length);
             RobustUartHelpers::parseSlaveInfo(payload, length, connectedSlaves);
-            
+
             lastUartReceive = millis();
             robustUart.resetRx(); // Ready for next frame
         }
     }
-    
+
     // Print stats periodically for debugging
     static unsigned long lastStats = 0;
-    if (millis() - lastStats >= 10000) { // Every 10 seconds
+    if (millis() - lastStats >= 10000)
+    { // Every 10 seconds
         robustUart.printStats();
         lastStats = millis();
     }
@@ -432,7 +446,6 @@ void initPeripherals()
     Serial.println("[Peripherals] Encoders initialized");
 
     shiftChain = factory.createShiftRegisterChain(LATCH_PIN, DATA_PIN, CLOCK_PIN);
-
 
     // Create double displays for production and consumption totals (8 digits each)
     productionTotalDisplay = factory.createSegmentDisplay(shiftChain, 8);
@@ -473,34 +486,45 @@ void initPeripherals()
 
     auto &gameManager = GameManager::getInstance();
 
-    gameManager.registerPowerPlantTypeControl(COAL,   encoder1, display1, bargraph1);
-    gameManager.registerPowerPlantTypeControl(GAS,    encoder2, display2, bargraph2);
-    gameManager.registerPowerPlantTypeControl(NUCLEAR,encoder3, display3, bargraph3);
-    gameManager.registerPowerPlantTypeControl(BATTERY,encoder4, display4, bargraph4);
+    gameManager.registerPowerPlantTypeControl(COAL, encoder1, display1, bargraph1);
+    gameManager.registerPowerPlantTypeControl(GAS, encoder2, display2, bargraph2);
+    gameManager.registerPowerPlantTypeControl(NUCLEAR, encoder3, display3, bargraph3);
+    gameManager.registerPowerPlantTypeControl(BATTERY, encoder4, display4, bargraph4);
     gameManager.registerPowerPlantTypeControl(HYDRO_STORAGE, encoder4, display4, bargraph4); // Share with battery
-    gameManager.registerPowerPlantTypeControl(HYDRO,  encoder5,  display5, bargraph5);
-    gameManager.registerPowerPlantTypeControl(WIND,   nullptr,  display6, bargraph6);
+    gameManager.registerPowerPlantTypeControl(HYDRO, encoder5, display5, bargraph5);
+    gameManager.registerPowerPlantTypeControl(WIND, nullptr, display6, bargraph6);
     gameManager.registerPowerPlantTypeControl(PHOTOVOLTAIC, nullptr, display7, bargraph7);
     // Set total displays for production and consumption
     gameManager.setTotalDisplays(productionTotalDisplay, consumptionTotalDisplay);
     Serial.println("[Peripherals] Total displays for production and consumption initialized");
     // Push attraction states periodically
     factory.createPeriodic(500, []()
-    { GameManager::getInstance().updateAttractionStates(); });
+                           { GameManager::getInstance().updateAttractionStates(); });
 }
 
 TaskHandle_t ioTaskHandle = nullptr;
 
-void IRAM_ATTR onDisplayTimer() {
-    GameManager::updateDisplays();
+void IRAM_ATTR onDisplayTimer()
+{
     factory.update();
 }
 
-void initDisplayTimer() {
-    displayTimer = timerBegin(0, 80, true);       // 1 MHz
-    timerAttachInterrupt(displayTimer, &onDisplayTimer, true);
-    timerAlarmWrite(displayTimer, 1000, true);    // 1 kHz
+void initDisplayTimer()
+{
+
+    displayTimer = timerBegin(0, 80, true);                     // 1 MHz
+    timerAttachInterrupt(displayTimer, &onDisplayTimer, false); // EDGE nepodporováno
+    timerAlarmWrite(displayTimer, 1000, true);                  // 1 kHz
     timerAlarmEnable(displayTimer);
+}
+
+void displayTask(void*)
+{
+    for (;;)
+    {
+        GameManager::updateDisplays();
+        vTaskDelay(1);
+    }
 }
 void setup()
 {
@@ -544,7 +568,6 @@ void setup()
         Serial.println("[ESP-API] Skipped due to WiFi connection failure");
     }
 
-
     // ---------- UART Communication Initialization ----------
     initUartCommunication();
 
@@ -564,7 +587,7 @@ void setup()
     Serial.printf("[COM-PROT] Master (via retranslation) UART on RX=%d, TX=%d\n", UART_RX_PIN, UART_TX_PIN);
     Serial.println("Setup done ✓");
     initDisplayTimer();
-   
+    xTaskCreatePinnedToCore(displayTask, "DisplayTask", 2048, NULL, 1, &ioTaskHandle, 1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -574,7 +597,8 @@ void setup()
 void loop()
 {
     // Update ESP API if connected
-    if (WiFi.status() == WL_CONNECTED) {
+    if (WiFi.status() == WL_CONNECTED)
+    {
         GameManager::getInstance().updateEspApi();
     }
 
@@ -599,10 +623,11 @@ void loop()
         nfcRegistry.printDatabase(); // Print NFC registry info
 
         GameManager::printDebugInfo();
-        
+
         // Print coefficient debug info every 10 seconds
         static unsigned long lastCoefficientDebug = 0;
-        if (millis() - lastCoefficientDebug >= 10000) {
+        if (millis() - lastCoefficientDebug >= 10000)
+        {
             GameManager::printCoefficientDebugInfo();
             lastCoefficientDebug = millis();
         }

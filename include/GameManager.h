@@ -415,6 +415,54 @@ private:
         for (size_t i = 0; i < powerPlantCount; i++) {
             auto& plant = powerPlants[i];
             
+            // Check production coefficient to enable/disable displays
+            float coefficient = getProductionCoefficientForType(static_cast<uint8_t>(plant.plantType));
+            bool shouldEnable = (coefficient > 0.0f);
+            
+            // Special case: Battery and Hydro Storage share display
+            // Enable if either has a non-zero coefficient
+            if (plant.plantType == BATTERY) {
+                float hydroStorageCoeff = getProductionCoefficientForType(static_cast<uint8_t>(HYDRO_STORAGE));
+                shouldEnable = (coefficient > 0.0f) || (hydroStorageCoeff > 0.0f);
+            }
+            
+            // Enable/disable display and bargraph based on coefficient
+            if (plant.powerDisplay) {
+                plant.powerDisplay->setEnabled(shouldEnable);
+            }
+            if (plant.powerBargraph) {
+                plant.powerBargraph->setEnabled(shouldEnable);
+            }
+            
+            // Debug output for display state changes (throttled)
+            static unsigned long lastDisplayDebug = 0;
+            static bool lastState[8] = {false}; // Track last state for each plant type
+            if (millis() - lastDisplayDebug > 5000 && i < 8) { // Debug every 5 seconds
+                if (lastState[i] != shouldEnable) {
+                    Serial.printf("[DISPLAY] Plant type %d (%s): %s (coeff=%.3f)\n", 
+                                 static_cast<int>(plant.plantType),
+                                 (plant.plantType == COAL ? "COAL" :
+                                  plant.plantType == GAS ? "GAS" :
+                                  plant.plantType == NUCLEAR ? "NUCLEAR" :
+                                  plant.plantType == BATTERY ? "BATTERY" :
+                                  plant.plantType == HYDRO_STORAGE ? "HYDRO_STORAGE" :
+                                  plant.plantType == HYDRO ? "HYDRO" :
+                                  plant.plantType == WIND ? "WIND" :
+                                  plant.plantType == PHOTOVOLTAIC ? "PHOTOVOLTAIC" : "UNKNOWN"),
+                                 shouldEnable ? "ENABLED" : "DISABLED",
+                                 coefficient);
+                    lastState[i] = shouldEnable;
+                }
+                if (i == powerPlantCount - 1) { // Reset timer on last plant
+                    lastDisplayDebug = millis();
+                }
+            }
+            
+            // Skip further updates if disabled
+            if (!shouldEnable) {
+                continue;
+            }
+            
             // Calculate total power for this type including UART powerplants
             float totalPowerForType = calculateTotalPowerForType(static_cast<uint8_t>(plant.plantType));
             
