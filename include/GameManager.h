@@ -9,10 +9,7 @@
 #include "power_plant_config.h"
 #include "PeripheralFactory.h"
 
-// Forward declarations for peripheral classes
-class Encoder;
-class SegmentDisplay;
-class Bargraph;
+// ConnectedBuilding is defined in ESPGameAPI.h — do not redefine here.
 
 // Power plant type enumeration
 enum PowerPlantType : uint8_t {
@@ -159,6 +156,9 @@ public:
         espApi->setConsumptionCallback([this]() { return getTotalConsumption(); });
         espApi->setPowerPlantsCallback([this]() { return getConnectedPowerPlants(); });
         espApi->setConsumersCallback([this]() { return getConnectedConsumers(); });
+        espApi->setBuildingsCallback([this](const std::vector<ConnectedBuilding>& buildings) {
+            restoreConnectedBuildings(buildings);
+        });
         
         // Set intervals
         espApi->setUpdateInterval(500);
@@ -257,6 +257,18 @@ public:
     
     // Update ESP-API (call this in main loop)
     bool updateEspApi() {
+        if (espApi) {
+            // Set connected buildings for sending
+            if (nfcRegistry) {
+                auto buildings = nfcRegistry->getAllBuildings();
+                std::vector<ConnectedBuilding> connectedBuildings;
+                for (const auto& pair : buildings) {
+                    connectedBuildings.push_back({pair.second.uid, pair.second.buildingType});
+                }
+                espApi->setConnectedBuildings(connectedBuildings);
+            }
+        }
+        
         bool result = espApi ? espApi->update() : false;
         
         // If connected, request production ranges and coefficients
@@ -398,6 +410,11 @@ public:
         // Update consumption every 2 seconds
         if (millis() - lastConsumptionUpdate >= 2000) {
             updateConsumptionFromBuildings();
+        }
+        
+        // Update connected buildings in ESP-API
+        if (espApi) {
+            espApi->setConnectedBuildings(getConnectedBuildingsForAPI());
         }
         
         // Update attraction states based on power percentages
@@ -579,6 +596,35 @@ public:
     void initNfcRegistry(NFCBuildingRegistry* registry) {
         nfcRegistry = registry;
         Serial.println("[GameManager] NFC Building Registry initialized");
+    }
+
+    // Restore connected buildings from server
+    void restoreConnectedBuildings(const std::vector<ConnectedBuilding>& buildings) {
+        if (!nfcRegistry) return;
+        
+        Serial.printf("[GameManager] Restoring %zu connected buildings from server\n", buildings.size());
+        
+        // Clear existing buildings first
+        nfcRegistry->clearDatabase();
+        
+        // Add buildings from server
+        for (const auto& building : buildings) {
+            nfcRegistry->addBuilding(building.uid, building.building_type);
+            Serial.printf("[GameManager] Restored building UID:%s Type:%u\n", 
+                         building.uid.c_str(), building.building_type);
+        }
+    }
+
+    // Get connected buildings with UIDs for sending to server
+    std::vector<ConnectedBuilding> getConnectedBuildingsForAPI() {
+        std::vector<ConnectedBuilding> buildings;
+        if (nfcRegistry) {
+            auto nfcBuildings = nfcRegistry->getAllBuildings();
+            for (const auto& pair : nfcBuildings) {
+                buildings.push_back({pair.second.uid, pair.second.buildingType});
+            }
+        }
+        return buildings;
     }
 
     // Set total displays for production and consumption
