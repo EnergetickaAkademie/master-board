@@ -518,14 +518,7 @@ void initDisplayTimer()
     timerAlarmEnable(displayTimer);
 }
 
-void displayTask(void*)
-{
-    for (;;)
-    {
-        GameManager::updateDisplays();
-        vTaskDelay(1);
-    }
-}
+
 void setup()
 {
     Serial.begin(115200);
@@ -587,13 +580,13 @@ void setup()
     Serial.printf("[COM-PROT] Master (via retranslation) UART on RX=%d, TX=%d\n", UART_RX_PIN, UART_TX_PIN);
     Serial.println("Setup done ✓");
     initDisplayTimer();
-    xTaskCreatePinnedToCore(displayTask, "DisplayTask", 4096, NULL, 1, &ioTaskHandle, 1);
+    //xTaskCreatePinnedToCore(displayTask, "DisplayTask", 2048, NULL, 1, &ioTaskHandle, 1);
 }
 
 /* ------------------------------------------------------------------ */
 /*                                LOOP                                */
 /* ------------------------------------------------------------------ */
-
+unsigned long last_update_time = 0;
 void loop()
 {
     // Update ESP API if connected
@@ -606,6 +599,9 @@ void loop()
 
     // UART Communication processing (receive slave info)
     processUartData();
+    if(millis() - last_update_time > 30) {
+                GameManager::updateDisplays();
+    }
 
     if (millis() - lastDebugTime >= POWER_PLANT_DEBUG_INTERVAL)
     {
