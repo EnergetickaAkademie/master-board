@@ -59,7 +59,16 @@ hw_timer_t *displayTimer = nullptr;
 #define COMPROT_PIN 19
 
 /* UART Communication with Retranslation Station */
-#define UART_RX_PIN 19 //
+// For BOARD_ID 5 hardware the intended RX pin was miswired: design expected GPIO19 but
+// working connection is on GPIO48. Automatically switch and warn so firmware still works.
+#if defined(BOARD_ID) && (BOARD_ID == 5)
+#define UART_RX_PIN 48
+#define UART_RX_PIN_STR "48"
+#warning "Compiling board 5: assuming bad pin 19 switching to 48"
+#else
+#define UART_RX_PIN 19
+#define UART_RX_PIN_STR "19"
+#endif
 #define UART_TX_PIN 47
 
 /* ------------------------------------------------------------------ */
@@ -374,9 +383,13 @@ bool connectToWiFi()
 
 void initUartCommunication()
 {
-    // Initialize UART1 with 9600 baud rate on pins 19 (RX) and 47 (TX)
     uartComm.begin(9600, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
-    Serial.println("[UART] Robust communication initialized on pins RX=19, TX=47, baud=9600");
+#if defined(BOARD_ID) && (BOARD_ID == 5)
+    Serial.println(F("[UART][WARN] BOARD_ID=5: assuming bad pin 19, switching RX to 48"));
+#endif
+    Serial.print(F("[UART] Robust communication initialized on pins RX="));
+    Serial.print(UART_RX_PIN_STR);
+    Serial.println(F(", TX=47, baud=9600"));
 }
 
 // Write function for robust UART
@@ -497,9 +510,7 @@ void initPeripherals()
     // Set total displays for production and consumption
     gameManager.setTotalDisplays(productionTotalDisplay, consumptionTotalDisplay);
     Serial.println("[Peripherals] Total displays for production and consumption initialized");
-    // Push attraction states periodically
-    factory.createPeriodic(500, []()
-                           { GameManager::getInstance().updateAttractionStates(); });
+    // Note: updateAttractionStates() moved to main loop to avoid interrupt context issues
 }
 
 TaskHandle_t ioTaskHandle = nullptr;
@@ -599,6 +610,9 @@ void loop()
 
     // UART Communication processing (receive slave info)
     processUartData();
+    
+    // Update retranslation station status (handled inside display update too, but keep here for timely state)
+    GameManager::getInstance().updateRetranslationStatus();
     if(millis() - last_update_time > 30) {
                 GameManager::updateDisplays();
     }
@@ -626,6 +640,15 @@ void loop()
         {
             GameManager::printCoefficientDebugInfo();
             lastCoefficientDebug = millis();
+        }
+        
+        // Print retranslation status
+        static bool lastRetranslationStatus = true;
+    bool currentStatus = GameManager::getInstance().isRetranslationStationAlive();
+        if (lastRetranslationStatus != currentStatus) {
+            Serial.printf("[RETRANSLATION] Status changed: %s\n", 
+                         currentStatus ? "CONNECTED" : "DISCONNECTED");
+            lastRetranslationStatus = currentStatus;
         }
     }
 }

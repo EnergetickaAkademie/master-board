@@ -139,6 +139,13 @@ namespace RobustUartHelpers {
     
     void parseSlaveInfo(const uint8_t* payload, uint8_t length, 
                        std::vector<UartSlaveInfo>& connectedSlaves) {
+        // Special short frame: status response only (request/response model)
+        if (length == 2 && payload[0] == 0xFF && payload[1] == 0x55) {
+            Serial.println("[RobustUART] Status response frame");
+            GameManager::getInstance().onRetranslationPingReceived();
+            return;
+        }
+
         if (length % 2 != 0) {
             Serial.printf("[RobustUART] Invalid slave info length: %d\n", length);
             return;

@@ -120,6 +120,15 @@ private:
     // Total displays for production and consumption
     SegmentDisplay* productionTotalDisplay;
     SegmentDisplay* consumptionTotalDisplay;
+    
+    // Retranslation station connectivity tracking
+    unsigned long lastRetranslationPing;   // millis() of last ping / status response
+    unsigned long lastPingRequest;         // millis() when we last sent a status request
+    bool retranslationConnected;           // current evaluated connectivity state
+    bool displayBlinkState;                // current blink phase
+    unsigned long lastBlinkToggle;         // last toggle time
+    static constexpr unsigned long RETRANSLATION_TIMEOUT_MS = 3000;      // if no ping within 3s -> disconnected
+    static constexpr unsigned long PING_REQUEST_INTERVAL_MS = 2000;      // send status request every 2s
 
     // Throttling for server requests
     unsigned long lastRequestTime;
@@ -135,6 +144,11 @@ private:
         lastConsumptionUpdate(0),
         productionTotalDisplay(nullptr),
         consumptionTotalDisplay(nullptr),
+    lastRetranslationPing(0),
+    lastPingRequest(0),
+    retranslationConnected(false),
+    displayBlinkState(false),
+    lastBlinkToggle(0),
         lastRequestTime(0) {
         // Initialize power plants array
         for (auto& plant : powerPlants) {
@@ -428,108 +442,7 @@ public:
 
     // Update displays (private implementation)
 private:
-    void updateDisplaysImpl() {
-        for (size_t i = 0; i < powerPlantCount; i++) {
-            auto& plant = powerPlants[i];
-            
-            // Check production coefficient to enable/disable displays
-            float coefficient = getProductionCoefficientForType(static_cast<uint8_t>(plant.plantType));
-            bool shouldEnable = (coefficient > 0.0f);
-            
-            // Special case: Battery and Hydro Storage share display
-            // Enable if either has a non-zero coefficient
-            if (plant.plantType == BATTERY) {
-                float hydroStorageCoeff = getProductionCoefficientForType(static_cast<uint8_t>(HYDRO_STORAGE));
-                shouldEnable = (coefficient > 0.0f) || (hydroStorageCoeff > 0.0f);
-            }
-            
-            // Enable/disable display and bargraph based on coefficient
-            if (plant.powerDisplay) {
-                plant.powerDisplay->setEnabled(shouldEnable);
-            }
-            if (plant.powerBargraph) {
-                plant.powerBargraph->setEnabled(shouldEnable);
-            }
-            
-            // Debug output for display state changes (throttled) - disabled to save stack space
-            /*
-            static unsigned long lastDisplayDebug = 0;
-            static bool lastState[8] = {false}; // Track last state for each plant type
-            if (millis() - lastDisplayDebug > 5000 && i < 8) { // Debug every 5 seconds
-                if (lastState[i] != shouldEnable) {
-                    const char* typeName = "UNK";
-                    switch (plant.plantType) {
-                        case COAL: typeName = "COAL"; break;
-                        case GAS: typeName = "GAS"; break;
-                        case NUCLEAR: typeName = "NUCLEAR"; break;
-                        case BATTERY: typeName = "BATTERY"; break;
-                        case HYDRO_STORAGE: typeName = "HYDRO_STORAGE"; break;
-                        case HYDRO: typeName = "HYDRO"; break;
-                        case WIND: typeName = "WIND"; break;
-                        case PHOTOVOLTAIC: typeName = "PHOTOVOLTAIC"; break;
-                    }
-                    Serial.printf("[DISPLAY] %s: %s (%.3f)\n", 
-                                 typeName, shouldEnable ? "ON" : "OFF", coefficient);
-                    lastState[i] = shouldEnable;
-                }
-                if (i == powerPlantCount - 1) { // Reset timer on last plant
-                    lastDisplayDebug = millis();
-                }
-            }
-            */
-            
-            // Skip further updates if disabled
-            if (!shouldEnable) {
-                continue;
-            }
-            
-            // Calculate total power for this type including UART powerplants
-            float totalPowerForType = calculateTotalPowerForType(static_cast<uint8_t>(plant.plantType));
-            
-            // For battery display, also add hydro storage power (they share display)
-            if (plant.plantType == BATTERY) {
-                float hydroStoragePower = calculateTotalPowerForType(static_cast<uint8_t>(HYDRO_STORAGE));
-                totalPowerForType += hydroStoragePower;
-            }
-            // For hydro storage, skip display update since it shares with battery
-            else if (plant.plantType == HYDRO_STORAGE) {
-                continue; // Skip individual display update, handled by battery
-            }
-            
-            // Update power displays with total power (including count)
-            if (plant.powerDisplay) {
-                plant.powerDisplay->displayNumber(totalPowerForType);
-            }
-            
-            // Update power bargraph based on encoder percentage
-            if (plant.powerBargraph) {
-                uint8_t desiredLEDs;
-
-                // If powerplant type is disabled (max power = 0), show 0 bars
-                if (plant.maxWatts <= 0.0f) {
-                    desiredLEDs = 10; // Hardware inverted: 10 = no LEDs lit
-                } else {
-                    // Calculate bargraph value: 0% encoder = 0 LEDs, 100% encoder = 10 LEDs
-                    // The hardware is inverted: setValue(0) = fully lit, setValue(10) = not lit
-                    // So we invert: 0% → setValue(10), 100% → setValue(0)
-                    desiredLEDs = static_cast<uint8_t>(plant.powerPercentage.load() * 10);
-                }
-
-                plant.powerBargraph->setValue(desiredLEDs);
-            }
-        }
-        
-        // Update total displays
-        if (productionTotalDisplay) {
-            float totalProduction = getTotalProduction();
-            productionTotalDisplay->displayNumber(totalProduction, 1);
-        }
-        
-        if (consumptionTotalDisplay) {
-            float totalConsumption = getTotalConsumption();
-            consumptionTotalDisplay->displayNumber(totalConsumption, 1);
-        }
-    }
+    void updateDisplaysImpl();
 
 public:
 
@@ -633,6 +546,12 @@ public:
         consumptionTotalDisplay = consumptionDisplay;
         Serial.println("[GameManager] Total displays set for production and consumption");
     }
+    
+    // Connectivity helpers
+    bool isRetranslationStationAlive() const { return retranslationConnected; }
+    void onRetranslationPingReceived();
+    void updateRetranslationStatus();
+    void requestRetranslationStatus();
 
     // Get count of power plants
     size_t getPowerPlantCount() const { return powerPlantCount; }

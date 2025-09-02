@@ -498,3 +498,169 @@ void GameManager::purgeInvalidUartPowerplants() {
         Serial.printf("[UART] Purged %zu invalid slave type entries\n", removed);
     }
 }
+
+void GameManager::updateDisplaysImpl() {
+    // NOTE: Only the aggregate production / consumption displays blink on connectivity loss.
+    // Individual plant displays and bargraphs stay steady to avoid excessive visual noise.
+    
+    for (size_t i = 0; i < powerPlantCount; i++) {
+        auto& plant = powerPlants[i];
+        
+        // Check production coefficient to enable/disable displays
+        float coefficient = getProductionCoefficientForType(static_cast<uint8_t>(plant.plantType));
+        bool shouldEnable = (coefficient > 0.0f);
+        
+        // Special case: Battery and Hydro Storage share display
+        // Enable if either has a non-zero coefficient
+        if (plant.plantType == BATTERY) {
+            float hydroStorageCoeff = getProductionCoefficientForType(static_cast<uint8_t>(HYDRO_STORAGE));
+            shouldEnable = (coefficient > 0.0f) || (hydroStorageCoeff > 0.0f);
+        }
+        
+        // Enable/disable display and bargraph based on coefficient
+        if (plant.powerDisplay) {
+            plant.powerDisplay->setEnabled(shouldEnable);
+        }
+        if (plant.powerBargraph) {
+            plant.powerBargraph->setEnabled(shouldEnable);
+        }
+        
+        // Debug output for display state changes (throttled) - disabled to save stack space
+        /*
+        static unsigned long lastDisplayDebug = 0;
+        static bool lastState[8] = {false}; // Track last state for each plant type
+        if (millis() - lastDisplayDebug > 5000 && i < 8) { // Debug every 5 seconds
+            if (lastState[i] != shouldEnable) {
+                const char* typeName = "UNK";
+                switch (plant.plantType) {
+                    case COAL: typeName = "COAL"; break;
+                    case GAS: typeName = "GAS"; break;
+                    case NUCLEAR: typeName = "NUCLEAR"; break;
+                    case BATTERY: typeName = "BATTERY"; break;
+                    case HYDRO_STORAGE: typeName = "HYDRO_STORAGE"; break;
+                    case HYDRO: typeName = "HYDRO"; break;
+                    case WIND: typeName = "WIND"; break;
+                    case PHOTOVOLTAIC: typeName = "PHOTOVOLTAIC"; break;
+                }
+                Serial.printf("[DISPLAY] %s: %s (%.3f)\n", 
+                             typeName, shouldEnable ? "ON" : "OFF", coefficient);
+                lastState[i] = shouldEnable;
+            }
+            if (i == powerPlantCount - 1) { // Reset timer on last plant
+                lastDisplayDebug = millis();
+            }
+        }
+        */
+        
+        // Skip further updates if disabled
+        if (!shouldEnable) {
+            continue;
+        }
+        
+        // Calculate total power for this type including UART powerplants
+        float totalPowerForType = calculateTotalPowerForType(static_cast<uint8_t>(plant.plantType));
+        
+        // For battery display, also add hydro storage power (they share display)
+        if (plant.plantType == BATTERY) {
+            float hydroStoragePower = calculateTotalPowerForType(static_cast<uint8_t>(HYDRO_STORAGE));
+            totalPowerForType += hydroStoragePower;
+        }
+        // For hydro storage, skip display update since it shares with battery
+        else if (plant.plantType == HYDRO_STORAGE) {
+            continue; // Skip individual display update, handled by battery
+        }
+        
+        // Update power displays with total power (including count)
+        if (plant.powerDisplay) {
+            plant.powerDisplay->displayNumber(totalPowerForType);
+        }
+        if (plant.powerBargraph) {
+            // Calculate bargraph value: 0% encoder = 0 LEDs, 100% encoder = 10 LEDs
+            // The hardware is inverted: setValue(0) = fully lit, setValue(10) = not lit
+            // So we invert: 0% → setValue(10), 100% → setValue(0)
+            uint8_t desiredLEDs;
+            if (plant.maxWatts <= 0.0f) {
+                desiredLEDs = 10; // disabled
+            } else {
+                desiredLEDs = static_cast<uint8_t>(plant.powerPercentage.load() * 10);
+            }
+            plant.powerBargraph->setValue(desiredLEDs);
+        }
+    }
+    
+    // Update total displays
+    if (productionTotalDisplay) {
+        float totalProduction = getTotalProduction();
+        if (!retranslationConnected) {
+            static unsigned long lastBlinkTime = 0;
+            static bool blinkState = false;
+            
+            if (millis() - lastBlinkTime >= 500) { // Blink every 500ms
+                blinkState = !blinkState;
+                lastBlinkTime = millis();
+            }
+            
+            if (blinkState) {
+                productionTotalDisplay->displayNumber(totalProduction, 1);
+            } else {
+                productionTotalDisplay->clear(); // Turn off display for blink effect
+            }
+        } else {
+            productionTotalDisplay->displayNumber(totalProduction, 1);
+        }
+    }
+    
+    if (consumptionTotalDisplay) {
+        float totalConsumption = getTotalConsumption();
+        if (!retranslationConnected) {
+            static unsigned long lastBlinkTime = 0;
+            static bool blinkState = false;
+            
+            if (millis() - lastBlinkTime >= 500) { // Blink every 500ms
+                blinkState = !blinkState;
+                lastBlinkTime = millis();
+            }
+            
+            if (blinkState) {
+                consumptionTotalDisplay->displayNumber(totalConsumption, 1);
+            } else {
+                consumptionTotalDisplay->clear(); // Turn off display for blink effect
+            }
+        } else {
+            consumptionTotalDisplay->displayNumber(totalConsumption, 1);
+        }
+    }
+}
+
+// ---------------- Retranslation station connectivity (request/response only) ----------------
+#include "robust_uart.h"
+extern RobustUart robustUart; // defined elsewhere
+extern void uartWriteFunction(const uint8_t* data, size_t len);
+
+void GameManager::onRetranslationPingReceived() {
+    lastRetranslationPing = millis();
+    if (!retranslationConnected) {
+        retranslationConnected = true;
+        Serial.println("[RETRANSLATION] Connected (status response received)");
+    }
+}
+
+void GameManager::requestRetranslationStatus() {
+    unsigned long now = millis();
+    if (now - lastPingRequest < PING_REQUEST_INTERVAL_MS) return; // throttle
+    lastPingRequest = now;
+    uint8_t payload[2] = {0xFF, 0x33}; // status request
+    robustUart.sendFrame(payload, 2, uartWriteFunction);
+    Serial.println("[RETRANSLATION] Status request sent");
+}
+
+void GameManager::updateRetranslationStatus() {
+    // Periodically send request
+    requestRetranslationStatus();
+    // Evaluate timeout
+    unsigned long now = millis();
+    if (retranslationConnected && (now - lastRetranslationPing > RETRANSLATION_TIMEOUT_MS)) {
+        retranslationConnected = false;
+        Serial.println("[RETRANSLATION] Disconnected (timeout)");
+    }
+}
