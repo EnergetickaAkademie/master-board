@@ -538,38 +538,42 @@ void setup()
     digitalWrite(BUZZER_PIN, LOW);
     initPeripherals();
 
-    if (connectToWiFi())
-    {
+    if (connectToWiFi()) {
+#ifdef PRODUCTION_SERVER_URL
+        // Production mode: directly use fixed server URL, no discovery.
+        Serial.println("\n🌐 Production mode: using fixed server URL");
+        const char *serverUrl = PRODUCTION_SERVER_URL;
+        auto &gameManager = GameManager::getInstance();
+        gameManager.initEspApi(serverUrl, BOARD_NAME, API_USERNAME, API_PASSWORD);
+        Serial.printf("[ESP-API] Initialized with %s\n", serverUrl);
+#else
         Serial.println("\n🔍 Discovering server...");
-
         IPAddress serverIp = findHttpServer();
-        if (!serverIp)
-        {
+        if (!serverIp) {
             Serial.println("[Server Discovery] MAC discovery failed, trying UDP broadcast discovery...");
             serverIp = findServerByBroadcast();
         }
-
-        if (serverIp)
-        {
+        if (serverIp) {
             Serial.printf("🎯 Server discovered at: %s\n", serverIp.toString().c_str());
-
             Serial.println("[ESP-API] Initializing via GameManager…");
             auto &gameManager = GameManager::getInstance();
             gameManager.initEspApi(("http://" + serverIp.toString()).c_str(), BOARD_NAME, API_USERNAME, API_PASSWORD);
             Serial.println("[ESP-API] Setup done ✓");
-        }
-        else
-        {
+        } else {
             Serial.println("⚠️  Server not found on local network");
             Serial.println("[ESP-API] Using fallback server URL from config…");
             auto &gameManager = GameManager::getInstance();
             gameManager.initEspApi("http://192.168.50.201", BOARD_NAME, API_USERNAME, API_PASSWORD);
             Serial.println("[ESP-API] Setup done with fallback URL ✓");
         }
-    }
-    else
-    {
+#endif
+    } else {
         Serial.println("[ESP-API] Skipped due to WiFi connection failure");
+#ifdef PRODUCTION_SERVER_URL
+        Serial.println("[SYSTEM] Restarting in 5s to retry WiFi...");
+        delay(5000);
+        esp_restart();
+#endif
     }
 
     // ---------- UART Communication Initialization ----------
@@ -590,6 +594,14 @@ void setup()
 
     Serial.printf("[COM-PROT] Master (via retranslation) UART on RX=%d, TX=%d\n", UART_RX_PIN, UART_TX_PIN);
     Serial.println("Setup done ✓");
+#ifdef PRODUCTION_SERVER_URL
+    // In production mode: do NOT restart just because the game is not active yet.
+    // A 404 or inactive game state simply means we wait until the server starts a game.
+    // Restarting is only appropriate if WiFi/server were unreachable (handled earlier).
+    if (!GameManager::getInstance().isGameActive()) {
+        Serial.println("[ESP-API][INFO] Game not active after init. Waiting for game start… (no restart)");
+    }
+#endif
     initDisplayTimer();
     //xTaskCreatePinnedToCore(displayTask, "DisplayTask", 2048, NULL, 1, &ioTaskHandle, 1);
 }

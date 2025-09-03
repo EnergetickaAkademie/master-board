@@ -133,6 +133,15 @@ private:
     // Throttling for server requests
     unsigned long lastRequestTime;
     static constexpr unsigned long REQUEST_INTERVAL_MS = 3000; // Request both coefficients and ranges every 3 seconds
+    
+    // Request in-flight tracking to prevent queue backlog
+    bool productionRangesRequestInFlight;
+    bool productionCoefficientsRequestInFlight;
+    
+    // Debug timing for API requests
+    unsigned long rangesRequestStartTime;
+    unsigned long coefficientsRequestStartTime;
+    unsigned long lastDebugTime;
 
     // Private constructor for singleton
     GameManager() :
@@ -149,7 +158,12 @@ private:
     retranslationConnected(false),
     displayBlinkState(false),
     lastBlinkToggle(0),
-        lastRequestTime(0) {
+        lastRequestTime(0),
+        productionRangesRequestInFlight(false),
+        productionCoefficientsRequestInFlight(false),
+        rangesRequestStartTime(0),
+        coefficientsRequestStartTime(0),
+        lastDebugTime(0) {
         // Initialize power plants array
         for (auto& plant : powerPlants) {
             plant = PowerPlant();
@@ -162,6 +176,9 @@ public:
         if (espApi) {
             delete espApi;
         }
+        
+        // Configure AsyncRequest with 2 workers for better throughput (can be increased if needed)
+        AsyncRequest::configure(2, true);  // 2 workers, allow insecure TLS
         
         espApi = new ESPGameAPI(serverUrl, boardName, BOARD_GENERIC, 500, 2000);
         
@@ -290,11 +307,39 @@ public:
         if (result && espApi) {
             unsigned long now = millis();
             
-            // Request both ranges and coefficients every 3 seconds
+            // Debug output every 5 seconds
+            if (now - lastDebugTime >= 5000) {
+                Serial.printf("[GameManager] API Status - Ranges: %s, Coefficients: %s\n", 
+                    productionRangesRequestInFlight ? "IN_FLIGHT" : "IDLE",
+                    productionCoefficientsRequestInFlight ? "IN_FLIGHT" : "IDLE");
+                
+                if (productionRangesRequestInFlight && rangesRequestStartTime > 0) {
+                    Serial.printf("[GameManager] Ranges request duration: %lu ms\n", now - rangesRequestStartTime);
+                }
+                if (productionCoefficientsRequestInFlight && coefficientsRequestStartTime > 0) {
+                    Serial.printf("[GameManager] Coefficients request duration: %lu ms\n", now - coefficientsRequestStartTime);
+                }
+                lastDebugTime = now;
+            }
+            
+            // Request both ranges and coefficients every 3 seconds, but only if not already in flight
             if (now - lastRequestTime >= REQUEST_INTERVAL_MS) {
-                requestProductionRanges();
-                requestProductionCoefficients();
-                lastRequestTime = now;
+                bool anyRequestSent = false;
+                
+                if (!productionRangesRequestInFlight) {
+                    requestProductionRanges();
+                    anyRequestSent = true;
+                }
+                
+                if (!productionCoefficientsRequestInFlight) {
+                    requestProductionCoefficients();
+                    anyRequestSent = true;
+                }
+                
+                // Only update the timer if we actually sent a request
+                if (anyRequestSent) {
+                    lastRequestTime = now;
+                }
             }
         }
         
@@ -303,10 +348,18 @@ public:
     
     // Request production ranges from server
     void requestProductionRanges() {
-        if (!espApi) return;
+        if (!espApi || productionRangesRequestInFlight) return;
+        
+        productionRangesRequestInFlight = true;
+        rangesRequestStartTime = millis();
+        Serial.println("[GameManager] 🚀 Starting production ranges request...");
         
         espApi->getProductionRanges([this](bool success, const std::vector<ProductionRange>& ranges, const std::string& error) {
+            unsigned long duration = millis() - rangesRequestStartTime;
+            productionRangesRequestInFlight = false;  // Reset flag when done
+            
             if (success) {
+                Serial.printf("[GameManager] ✅ Production ranges received in %lu ms\n", duration);
                 static unsigned long lastLogTime = 0;
                 if (millis() - lastLogTime > 10000) { // Log only every 10 seconds
                     Serial.println("📊 Production ranges received from server");
@@ -314,17 +367,25 @@ public:
                 }
                 updateCoefficientsFromGame(); // This will update both coefficients and ranges
             } else {
-                Serial.println("❌ Failed to get production ranges: " + String(error.c_str()));
+                Serial.printf("[GameManager] ❌ Production ranges failed after %lu ms: %s\n", duration, error.c_str());
             }
         });
     }
 
     // Request production coefficients from server
     void requestProductionCoefficients() {
-        if (!espApi) return;
+        if (!espApi || productionCoefficientsRequestInFlight) return;
+        
+        productionCoefficientsRequestInFlight = true;
+        coefficientsRequestStartTime = millis();
+        Serial.println("[GameManager] 🚀 Starting production coefficients request...");
         
         espApi->pollCoefficients([this](bool success, const std::string& error) {
+            unsigned long duration = millis() - coefficientsRequestStartTime;
+            productionCoefficientsRequestInFlight = false;  // Reset flag when done
+            
             if (success) {
+                Serial.printf("[GameManager] ✅ Production coefficients received in %lu ms\n", duration);
                 static unsigned long lastLogTime = 0;
                 if (millis() - lastLogTime > 10000) { // Log only every 10 seconds
                     Serial.println("📊 Production coefficients received from server");
@@ -332,7 +393,7 @@ public:
                 }
                 // Coefficients are automatically stored in espApi and can be accessed via getProductionCoefficients()
             } else {
-                Serial.println("❌ Failed to get production coefficients: " + String(error.c_str()));
+                Serial.printf("[GameManager] ❌ Production coefficients failed after %lu ms: %s\n", duration, error.c_str());
             }
         });
     }
@@ -361,7 +422,7 @@ public:
         auto& plant = powerPlants[powerPlantCount];
         plant.plantType = plantType;
         plant.minWatts = 0.0f;  // Will be updated from server
-        plant.maxWatts = 1000.0f;  // Default max, will be updated from server
+        plant.maxWatts = 0.0f;  // Start at 0, will be updated from server when game starts
         plant.encoder = encoder;
         plant.powerDisplay = powerDisplay;
         plant.powerBargraph = powerBargraph;

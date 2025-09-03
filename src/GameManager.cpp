@@ -447,6 +447,8 @@ void GameManager::updateBattery(uint8_t slaveType, const PowerPlant& plant) {
 
 // Compute power per plant with a zero-centered deadband for symmetric ranges
 float GameManager::computePowerPerPlant(const PowerPlant& plant) const {
+    // Root-cause fix: before the game starts (no active ranges/coefficients) treat production as zero
+    if (!isGameActive()) return 0.0f;
     if (plant.maxWatts <= 0.0f) return 0.0f;
     const float pct = plant.powerPercentage.load();
     const float range = plant.maxWatts - plant.minWatts;
@@ -499,6 +501,11 @@ void GameManager::purgeInvalidUartPowerplants() {
     }
 }
 
+// Workaround GCC ICE at higher optimization levels: force no optimization here.
+#ifdef __GNUC__
+#pragma GCC push_options
+#pragma GCC optimize ("O0")
+#endif
 void GameManager::updateDisplaysImpl() {
     // NOTE: Only the aggregate production / consumption displays blink on connectivity loss.
     // Individual plant displays and bargraphs stay steady to avoid excessive visual noise.
@@ -608,9 +615,7 @@ void GameManager::updateDisplaysImpl() {
         } else {
             productionTotalDisplay->displayNumber(totalProduction, 1);
         }
-    }
-    
-    if (consumptionTotalDisplay) {
+    }    if (consumptionTotalDisplay) {
         float totalConsumption = getTotalConsumption();
         if (!retranslationConnected) {
             static unsigned long lastBlinkTime = 0;
@@ -631,6 +636,9 @@ void GameManager::updateDisplaysImpl() {
         }
     }
 }
+#ifdef __GNUC__
+#pragma GCC pop_options
+#endif
 
 // ---------------- Retranslation station connectivity (request/response only) ----------------
 #include "robust_uart.h"
