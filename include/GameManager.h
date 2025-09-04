@@ -790,6 +790,15 @@ public:
     static void printCoefficientDebugInfo() {
         getInstance().printCoefficientDebugInfoImpl();
     }
+    
+    // Call this when the game ends to clear all building state
+    void clearAllBuildingsOnGameEnd() {
+        if (nfcRegistry) {
+            nfcRegistry->clearDatabase();
+            Serial.println("[GameManager] Cleared building database on game end");
+        }
+        buildingsInitializedFromServer = false;
+    }
 };
 
 #endif // GAME_MANAGER_H
