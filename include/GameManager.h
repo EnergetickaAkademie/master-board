@@ -143,6 +143,9 @@ private:
     unsigned long coefficientsRequestStartTime;
     unsigned long lastDebugTime;
 
+    // Track whether we've already applied initial building list from server
+    bool buildingsInitializedFromServer; // prevents later callbacks from wiping locally scanned buildings
+
     // Private constructor for singleton
     GameManager() :
         powerPlantCount(0),
@@ -163,7 +166,8 @@ private:
         productionCoefficientsRequestInFlight(false),
         rangesRequestStartTime(0),
         coefficientsRequestStartTime(0),
-        lastDebugTime(0) {
+        lastDebugTime(0),
+        buildingsInitializedFromServer(false) { // added init
         // Initialize power plants array
         for (auto& plant : powerPlants) {
             plant = PowerPlant();
@@ -576,16 +580,35 @@ public:
     void restoreConnectedBuildings(const std::vector<ConnectedBuilding>& buildings) {
         if (!nfcRegistry) return;
         
-        Serial.printf("[GameManager] Restoring %zu connected buildings from server\n", buildings.size());
+        Serial.printf("[GameManager] Server buildings callback: %zu entries (initialized=%s)\n", buildings.size(), buildingsInitializedFromServer ? "YES" : "NO");
         
-        // Clear existing buildings first
-        nfcRegistry->clearDatabase();
+        if (!buildingsInitializedFromServer) {
+            // First time: treat server as authoritative snapshot
+            nfcRegistry->clearDatabase();
+            for (const auto& building : buildings) {
+                nfcRegistry->addBuilding(building.uid, building.building_type);
+                Serial.printf("[GameManager] (init) Added building UID:%s Type:%u\n", 
+                              building.uid.c_str(), building.building_type);
+            }
+            buildingsInitializedFromServer = true;
+            return;
+        }
         
-        // Add buildings from server
+        // Subsequent callbacks: merge only (do NOT clear). Avoid wiping freshly scanned local buildings
+        // Build a set of existing UIDs
+        auto current = nfcRegistry->getAllBuildings();
+        size_t added = 0;
         for (const auto& building : buildings) {
-            nfcRegistry->addBuilding(building.uid, building.building_type);
-            Serial.printf("[GameManager] Restored building UID:%s Type:%u\n", 
-                         building.uid.c_str(), building.building_type);
+            bool exists = current.find(building.uid) != current.end();
+            if (!exists) {
+                nfcRegistry->addBuilding(building.uid, building.building_type);
+                Serial.printf("[GameManager] (merge) Added new server building UID:%s Type:%u\n", 
+                              building.uid.c_str(), building.building_type);
+                added++;
+            }
+        }
+        if (added == 0) {
+            Serial.println("[GameManager] (merge) No new buildings from server; local scan preserved");
         }
     }
 

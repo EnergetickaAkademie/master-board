@@ -315,10 +315,10 @@ void printWiFiStatusCode(wl_status_t status)
 
 bool connectToWiFi()
 {
-    const char *ssid = "PotkaniNora";
-    const char *password = "PrimaryPapikTarget";
-    // const char *ssid = "Bagr";
-    // const char *password = "bagroviste";
+    // const char *ssid = "PotkaniNora";
+    // const char *password = "PrimaryPapikTarget";
+    const char *ssid = "Bagr";
+    const char *password = "bagroviste";
 
     const int max_connection_attempts = 10;
 
