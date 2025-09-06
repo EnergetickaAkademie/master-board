@@ -315,10 +315,10 @@ void printWiFiStatusCode(wl_status_t status)
 
 bool connectToWiFi()
 {
-    // const char *ssid = "PotkaniNora";
-    // const char *password = "PrimaryPapikTarget";
-    const char *ssid = "Bagr";
-    const char *password = "bagroviste";
+    const char *ssid = "PotkaniNora";
+    const char *password = "PrimaryPapikTarget";
+    //const char *ssid = "Bagr";
+    //const char *password = "bagroviste";
 
     const int max_connection_attempts = 10;
 
@@ -591,6 +591,20 @@ void setup()
 
     auto &gameManager = GameManager::getInstance();
     gameManager.initNfcRegistry(&nfcRegistry);
+
+    // Immediate buzzer feedback on building add / delete
+    nfcRegistry.setOnNewBuildingCallback([](uint8_t buildingType, const String &uid){
+        Serial.printf("[NFC] New building type=%u uid=%s\n", buildingType, uid.c_str());
+        // Short beep: 2 quick pulses for clarity
+        digitalWrite(BUZZER_PIN, HIGH); delay(30); digitalWrite(BUZZER_PIN, LOW); delay(40);
+        digitalWrite(BUZZER_PIN, HIGH); delay(30); digitalWrite(BUZZER_PIN, LOW);
+    });
+    nfcRegistry.setOnDeleteBuildingCallback([](uint8_t buildingType, const String &uid){
+        Serial.printf("[NFC] Building removed type=%u uid=%s\n", buildingType, uid.c_str());
+        // Longer descending style (two spaced pulses)
+        digitalWrite(BUZZER_PIN, HIGH); delay(60); digitalWrite(BUZZER_PIN, LOW); delay(120);
+        digitalWrite(BUZZER_PIN, HIGH); delay(40); digitalWrite(BUZZER_PIN, LOW);
+    });
 
     Serial.printf("[COM-PROT] Master (via retranslation) UART on RX=%d, TX=%d\n", UART_RX_PIN, UART_TX_PIN);
     Serial.println("Setup done ✓");

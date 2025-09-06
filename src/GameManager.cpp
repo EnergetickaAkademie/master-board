@@ -240,7 +240,30 @@ static inline uint8_t onOffByPercent(const PowerPlant& plant) {
 }
 
 void GameManager::updatePhotovoltaic(uint8_t slaveType, const PowerPlant& plant) {
-    sendAttractionCommand(slaveType, onOffByPercent(plant));
+    // Photovoltaic attraction state is now based on the server-provided solar coefficient.
+    // A zero or low coefficient means night/no sun (idle, green light),
+    // while a high coefficient means sun is available (active, orange light).
+    // The slave itself will then use its light sensor to modulate brightness.
+    
+    uint8_t solarStateCommand = CMD_BATTERY_IDLE; // Default to idle (green)
+
+    // Activation threshold (can be overridden at compile time)
+    #ifndef SOLAR_ACTIVE_THRESHOLD
+    #define SOLAR_ACTIVE_THRESHOLD 0.5f
+    #endif
+
+    if (espApi) {
+        float solarCoefficient = getProductionCoefficientForType(SOURCE_PHOTOVOLTAIC);
+        if (solarCoefficient <= SOLAR_ACTIVE_THRESHOLD) {
+            solarStateCommand = CMD_ON; // orange / active
+        }
+    }
+    
+    // Send the determined command (CMD_BATTERY_IDLE for green, CMD_ON for orange)
+    sendCmd2B(slaveType, solarStateCommand);
+
+    // Optional: Keep debug output for monitoring
+    
 }
 
 void GameManager::updateWind(uint8_t slaveType, const PowerPlant& plant) {
