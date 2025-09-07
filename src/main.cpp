@@ -17,6 +17,7 @@
 #include "power_plant_config.h"
 #include "GameManager.h"
 #include "robust_uart.h"
+#include "secrets.h"
 
 /* ------------------------------------------------------------------ */
 /*                             PIN MAP                                */
@@ -315,66 +316,69 @@ void printWiFiStatusCode(wl_status_t status)
 
 bool connectToWiFi()
 {
-    const char *ssid = "PotkaniNora";
-    const char *password = "PrimaryPapikTarget";
-    //const char *ssid = "Bagr";
-    //const char *password = "bagroviste";
-
     const int max_connection_attempts = 10;
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
     delay(100);
-    Serial.println("\n🔄 Connecting to WiFi...");
-    Serial.print("SSID: ");
-    Serial.println(ssid);
+    
+    Serial.println("\n🔄 Attempting to connect to WiFi networks...");
+    
+    // Try each network in the list
+    for (size_t i = 0; i < WIFI_NETWORK_COUNT; i++) {
+        const char* ssid = WIFI_NETWORKS[i].ssid;
+        const char* password = WIFI_NETWORKS[i].password;
+        
+        Serial.printf("🌐 Trying network %zu/%zu: %s\n", i + 1, WIFI_NETWORK_COUNT, ssid);
+        
+        WiFi.begin(ssid, password);
+        
+        int attempts = 0;
+        while (WiFi.status() != WL_CONNECTED && attempts < max_connection_attempts) {
+            delay(1000);
+            Serial.print(".");
+            attempts++;
 
-    WiFi.begin(ssid, password);
-
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < max_connection_attempts)
-    {
-        delay(1000);
-        Serial.print(".");
-        attempts++;
-
-        // Print connection status
-        switch (WiFi.status())
-        {
-        case WL_NO_SSID_AVAIL:
-            Serial.print(" [SSID not found]");
-            break;
-        case WL_CONNECT_FAILED:
-            Serial.print(" [Connection failed]");
-            break;
-        case WL_CONNECTION_LOST:
-            Serial.print(" [Connection lost]");
-            break;
-        case WL_DISCONNECTED:
-            Serial.print(" [Disconnected]");
-            break;
+            // Print connection status for critical failures
+            switch (WiFi.status()) {
+            case WL_NO_SSID_AVAIL:
+                Serial.print(" [SSID not found]");
+                break;
+            case WL_CONNECT_FAILED:
+                Serial.print(" [Connection failed]");
+                break;
+            case WL_CONNECTION_LOST:
+                Serial.print(" [Connection lost]");
+                break;
+            case WL_DISCONNECTED:
+                Serial.print(" [Disconnected]");
+                break;
+            }
+        }
+        
+        Serial.println();
+        
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.println("✅ WiFi connected successfully!");
+            Serial.printf("📶 Connected to: %s\n", ssid);
+            Serial.printf("🌐 IP Address: %s\n", WiFi.localIP().toString().c_str());
+            Serial.printf("🔗 Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
+            Serial.printf("🎭 Subnet Mask: %s\n", WiFi.subnetMask().toString().c_str());
+            return true;
+        } else {
+            Serial.printf("❌ Failed to connect to %s\n", ssid);
+            Serial.print("Final status: ");
+            printWiFiStatusCode(WiFi.status());
+            Serial.println();
+            
+            // Disconnect and prepare for next attempt
+            WiFi.disconnect();
+            delay(1000);
         }
     }
-
-    Serial.println();
-
-    if (WiFi.status() == WL_CONNECTED)
-    {
-        Serial.println("✅ WiFi connected successfully!");
-        Serial.printf("📶 Connected to: %s\n", ssid);
-        Serial.printf("🌐 IP Address: %s\n", WiFi.localIP().toString().c_str());
-        Serial.printf("🔗 Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
-        Serial.printf("🎭 Subnet Mask: %s\n", WiFi.subnetMask().toString().c_str());
-        return true;
-    }
-    else
-    {
-        Serial.println("❌ WiFi connection failed!");
-        Serial.print("Final status: ");
-        printWiFiStatusCode(WiFi.status());
-        Serial.println();
-        return false;
-    }
+    
+    Serial.println("❌ All WiFi networks failed! No internet connection available.");
+    return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -538,42 +542,62 @@ void setup()
     digitalWrite(BUZZER_PIN, LOW);
     initPeripherals();
 
-    if (connectToWiFi()) {
-#ifdef PRODUCTION_SERVER_URL
-        // Production mode: directly use fixed server URL, no discovery.
-        Serial.println("\n🌐 Production mode: using fixed server URL");
-        const char *serverUrl = PRODUCTION_SERVER_URL;
-        auto &gameManager = GameManager::getInstance();
-        gameManager.initEspApi(serverUrl, BOARD_NAME, API_USERNAME, API_PASSWORD);
-        Serial.printf("[ESP-API] Initialized with %s\n", serverUrl);
-#else
-        Serial.println("\n🔍 Discovering server...");
-        IPAddress serverIp = findHttpServer();
-        if (!serverIp) {
-            Serial.println("[Server Discovery] MAC discovery failed, trying UDP broadcast discovery...");
-            serverIp = findServerByBroadcast();
-        }
-        if (serverIp) {
-            Serial.printf("🎯 Server discovered at: %s\n", serverIp.toString().c_str());
-            Serial.println("[ESP-API] Initializing via GameManager…");
-            auto &gameManager = GameManager::getInstance();
-            gameManager.initEspApi(("http://" + serverIp.toString()).c_str(), BOARD_NAME, API_USERNAME, API_PASSWORD);
-            Serial.println("[ESP-API] Setup done ✓");
-        } else {
-            Serial.println("⚠️  Server not found on local network");
-            Serial.println("[ESP-API] Using fallback server URL from config…");
-            auto &gameManager = GameManager::getInstance();
-            gameManager.initEspApi("http://192.168.50.201", BOARD_NAME, API_USERNAME, API_PASSWORD);
-            Serial.println("[ESP-API] Setup done with fallback URL ✓");
-        }
-#endif
-    } else {
-        Serial.println("[ESP-API] Skipped due to WiFi connection failure");
-#ifdef PRODUCTION_SERVER_URL
-        Serial.println("[SYSTEM] Restarting in 5s to retry WiFi...");
+    // WiFi connection with fallback and reboot
+    if (!connectToWiFi()) {
+        Serial.println("💀 CRITICAL: No WiFi networks available!");
+        Serial.println("🔄 Rebooting in 5 seconds to retry...");
         delay(5000);
         esp_restart();
+    }
+
+    // Server discovery and authentication
+    bool serverConnected = false;
+    auto &gameManager = GameManager::getInstance();
+    
+#ifdef PRODUCTION_SERVER_URL
+    // Production mode: directly use fixed server URL, no discovery.
+    Serial.println("\n🌐 Production mode: using fixed server URL");
+    const char *serverUrl = PRODUCTION_SERVER_URL;
+    serverConnected = gameManager.initEspApi(serverUrl, BOARD_NAME, SERVER_USERNAME, SERVER_PASSWORD);
+    if (serverConnected) {
+        Serial.printf("[ESP-API] ✅ Successfully connected to %s\n", serverUrl);
+    } else {
+        Serial.printf("[ESP-API] ❌ Failed to authenticate with %s\n", serverUrl);
+    }
+#else
+    Serial.println("\n🔍 Discovering server...");
+    IPAddress serverIp = findHttpServer();
+    if (!serverIp) {
+        Serial.println("[Server Discovery] MAC discovery failed, trying UDP broadcast discovery...");
+        serverIp = findServerByBroadcast();
+    }
+    if (serverIp) {
+        Serial.printf("🎯 Server discovered at: %s\n", serverIp.toString().c_str());
+        Serial.println("[ESP-API] Initializing via GameManager…");
+        serverConnected = gameManager.initEspApi(("http://" + serverIp.toString()).c_str(), BOARD_NAME, SERVER_USERNAME, SERVER_PASSWORD);
+        if (serverConnected) {
+            Serial.println("[ESP-API] ✅ Server connection and authentication successful");
+        } else {
+            Serial.println("[ESP-API] ❌ Server authentication failed");
+        }
+    } else {
+        Serial.println("⚠️  Server not found on local network");
+        Serial.println("[ESP-API] Using fallback server URL from config…");
+        serverConnected = gameManager.initEspApi("http://192.168.50.201", BOARD_NAME, SERVER_USERNAME, SERVER_PASSWORD);
+        if (serverConnected) {
+            Serial.println("[ESP-API] ✅ Fallback server connection successful");
+        } else {
+            Serial.println("[ESP-API] ❌ Fallback server authentication failed");
+        }
+    }
 #endif
+
+    // Check if server authentication failed and reboot
+    if (!serverConnected) {
+        Serial.println("💀 CRITICAL: Server authentication failed!");
+        Serial.println("🔄 Rebooting in 5 seconds to retry...");
+        delay(5000);
+        esp_restart();
     }
 
     // ---------- UART Communication Initialization ----------
@@ -586,10 +610,32 @@ void setup()
     Serial.printf("[NFC] Using pins: SCK=%d, MISO=%d, MOSI=%d, SS=%d, RST=%d\n",
                   NFC_SCK_PIN, NFC_MISO_PIN, NFC_MOSI_PIN, NFC_SS_PIN, NFC_RST_PIN);
 
-    // Initialize MFRC522
+    // Test NFC chip communication
+    Serial.print("[NFC] Testing MFRC522 communication... ");
     mfrc522.PCD_DumpVersionToSerial();
+    
+    // Check if MFRC522 is responding by reading version register
+    byte version = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
+    if (version == 0x00 || version == 0xFF) {
+        Serial.println("❌ [NFC] MFRC522 test FAILED - No response from chip!");
+        Serial.printf("[NFC] Version register: 0x%02X (expected: 0x90-0x92)\n", version);
+        
+        // Error buzzer: 3 short beeps
+        for (int i = 0; i < 3; i++) {
+            digitalWrite(BUZZER_PIN, HIGH); delay(100); 
+            digitalWrite(BUZZER_PIN, LOW); delay(100);
+        }
+    } else {
+        Serial.println("✅ [NFC] MFRC522 test PASSED - Chip responding correctly!");
+        Serial.printf("[NFC] Version register: 0x%02X\n", version);
+        
+        // Success buzzer: 2 rising tone beeps
+        digitalWrite(BUZZER_PIN, HIGH); delay(80); 
+        digitalWrite(BUZZER_PIN, LOW); delay(50);
+        digitalWrite(BUZZER_PIN, HIGH); delay(120); 
+        digitalWrite(BUZZER_PIN, LOW);
+    }
 
-    auto &gameManager = GameManager::getInstance();
     gameManager.initNfcRegistry(&nfcRegistry);
 
     // Immediate buzzer feedback on building add / delete

@@ -176,7 +176,7 @@ private:
 
 public:
     // ESP-API integration and initialization
-    void initEspApi(const char* serverUrl, const char* boardName, const char* username, const char* password) {
+    bool initEspApi(const char* serverUrl, const char* boardName, const char* username, const char* password) {
         if (espApi) {
             delete espApi;
         }
@@ -211,8 +211,10 @@ public:
             // Initialize throttling timer
             unsigned long now = millis();
             lastRequestTime = now;
+            return true; // Success
         } else {
             Serial.println("[GameManager] ESP-API login or registration failed");
+            return false; // Failed
         }
     }
     
