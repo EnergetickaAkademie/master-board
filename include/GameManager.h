@@ -145,6 +145,7 @@ private:
 
     // Track whether we've already applied initial building list from server
     bool buildingsInitializedFromServer; // prevents later callbacks from wiping locally scanned buildings
+    bool lastGameActive; // track previous game active state to detect end
 
     // Private constructor for singleton
     GameManager() :
@@ -167,7 +168,8 @@ private:
         rangesRequestStartTime(0),
         coefficientsRequestStartTime(0),
         lastDebugTime(0),
-        buildingsInitializedFromServer(false) { // added init
+    buildingsInitializedFromServer(false),
+    lastGameActive(false) { // added init
         // Initialize power plants array
         for (auto& plant : powerPlants) {
             plant = PowerPlant();
@@ -307,6 +309,14 @@ public:
         }
         
         bool result = espApi ? espApi->update() : false;
+
+        // Detect game end (transition active -> inactive) and clear building state
+        bool currentActive = isGameActive();
+        if (lastGameActive && !currentActive) {
+            Serial.println("[GameManager] Scenario ended -> clearing buildings");
+            clearAllBuildingsOnGameEnd();
+        }
+        lastGameActive = currentActive;
         
         // If connected, request production ranges and coefficients
         // But throttle the requests to avoid spamming the server
