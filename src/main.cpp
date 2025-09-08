@@ -110,7 +110,7 @@ IPAddress findHttpServer()
     uint32_t hostsScanned = 0;
 
     // First try common server IPs
-    uint8_t commonHosts[] = {2, 5, 6, 210, 11, 100, 105, 105, 106, 106, 101, 106, 200, 201, 4, 5, 7, 8, 9, 10, 12, 13, 14, 105, 15, 3, 106, 106, 106};
+    uint8_t commonHosts[] = {2,  6, 210, 11, 100, 105, 105, 106, 106, 101, 106, 200, 201, 4,  7, 8, 9, 10, 12, 13, 14, 105, 15, 3, 106, 106, 106};
     for (uint8_t host : commonHosts)
     {
         IPAddress target(subnet[0], subnet[1], subnet[2], host);

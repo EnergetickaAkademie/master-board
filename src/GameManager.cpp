@@ -350,46 +350,19 @@ void GameManager::updateGas(uint8_t slaveType, const PowerPlant& plant) {
 }
 
 void GameManager::updateHydro(uint8_t slaveType, const PowerPlant& plant) {
-    // Hydro powerplant control based on server-provided hydro coefficient
-    // 
-    // The server sends production coefficients for hydro that reflect current hydro conditions 
-    // (water flow, reservoir levels, etc.). When coefficient > HYDRO_COEFFICIENT_THRESHOLD, 
-    // hydro turbines should run. This allows the hydro powerplant to respond to real-time 
-    // water conditions from the game server rather than manual user control.
-    
-    uint8_t hydroState = 0;
-    
-    if (espApi) {
-        float hydroCoefficient = getProductionCoefficientForType(SOURCE_HYDRO);
-        hydroState = (hydroCoefficient > HYDRO_COEFFICIENT_THRESHOLD) ? 1 : 0;
-        
-        // Debug output to monitor hydro conditions and help tune parameters
-        static unsigned long lastHydroDebug = 0;
-        if (millis() - lastHydroDebug > 5000) { // Debug every 5 seconds
-            Serial.printf("[HYDRO] Server coefficient=%.2f, threshold=%.2f -> %s\n",
-                         hydroCoefficient, HYDRO_COEFFICIENT_THRESHOLD, 
-                         hydroState ? "RUNNING" : "STOPPED");
-            lastHydroDebug = millis();
-        }
-        
-        if (hydroCoefficient == 0.0f) {
-            // No hydro coefficient found or zero coefficient
-            static unsigned long lastNoDataDebug = 0;
-            if (millis() - lastNoDataDebug > 10000) { // Debug every 10 seconds
-                Serial.println("[HYDRO] No hydro coefficient from server - turbines stopped");
-                lastNoDataDebug = millis();
-            }
-        }
-    } else {
-        // No ESP API connection - keep turbines stopped
-        static unsigned long lastNoApiDebug = 0;
-        if (millis() - lastNoApiDebug > 10000) {
-            Serial.println("[HYDRO] No ESP API connection - turbines stopped");
-            lastNoApiDebug = millis();
-        }
-    }
-    
+    // Hydro powerplant control based on rotary encoder percentage
+    // Simple on/off control: OFF when encoder ≤ 50%, ON when encoder > 50%
+    uint8_t hydroState = onOffByPercent(plant);
     sendAttractionCommand(slaveType, hydroState);
+    
+    // Debug output to verify rotary control is working
+    static unsigned long lastHydroDebug = 0;
+    if (millis() - lastHydroDebug > 3000) { // Debug every 3 seconds
+        float pct = plant.powerPercentage.load();
+        Serial.printf("[HYDRO] Encoder: %.1f%% -> %s (threshold: 50%%)\n",
+                     pct * 100.0f, hydroState ? "ON" : "OFF");
+        lastHydroDebug = millis();
+    }
 }
 
 void GameManager::updateHydroStorage(uint8_t slaveType, const PowerPlant& plant) {
@@ -533,6 +506,12 @@ void GameManager::updateDisplaysImpl() {
     // NOTE: Only the aggregate production / consumption displays blink on connectivity loss.
     // Individual plant displays and bargraphs stay steady to avoid excessive visual noise.
     
+    // Detect if battery plant is registered (for shared battery + hydro storage display case)
+    bool batteryPresent = false;
+    for (size_t iDetect = 0; iDetect < powerPlantCount; ++iDetect) {
+        if (powerPlants[iDetect].plantType == BATTERY) { batteryPresent = true; break; }
+    }
+
     for (size_t i = 0; i < powerPlantCount; i++) {
         auto& plant = powerPlants[i];
         
@@ -545,6 +524,11 @@ void GameManager::updateDisplaysImpl() {
         if (plant.plantType == BATTERY) {
             float hydroStorageCoeff = getProductionCoefficientForType(static_cast<uint8_t>(HYDRO_STORAGE));
             shouldEnable = (coefficient > 0.0f) || (hydroStorageCoeff > 0.0f);
+        }
+        // If hydro storage is present WITHOUT a battery controller, treat it as standalone:
+        // always enable its UI so the user sees encoder feedback even before server ranges/coefs.
+        if (plant.plantType == HYDRO_STORAGE && !batteryPresent) {
+            shouldEnable = true;
         }
         
         // Enable/disable display and bargraph based on coefficient
@@ -595,9 +579,9 @@ void GameManager::updateDisplaysImpl() {
             float hydroStoragePower = calculateTotalPowerForType(static_cast<uint8_t>(HYDRO_STORAGE));
             totalPowerForType += hydroStoragePower;
         }
-        // For hydro storage, skip display update since it shares with battery
-        else if (plant.plantType == HYDRO_STORAGE) {
-            continue; // Skip individual display update, handled by battery
+        // For hydro storage when a battery is also present and (likely) sharing hardware, skip
+        else if (plant.plantType == HYDRO_STORAGE && batteryPresent) {
+            continue; // Battery iteration handles shared display/bargraph
         }
         
         // Update power displays with total power (including count)
@@ -608,12 +592,9 @@ void GameManager::updateDisplaysImpl() {
             // Calculate bargraph value: 0% encoder = 0 LEDs, 100% encoder = 10 LEDs
             // The hardware is inverted: setValue(0) = fully lit, setValue(10) = not lit
             // So we invert: 0% → setValue(10), 100% → setValue(0)
-            uint8_t desiredLEDs;
-            if (plant.maxWatts <= 0.0f) {
-                desiredLEDs = 10; // disabled
-            } else {
-                desiredLEDs = static_cast<uint8_t>(plant.powerPercentage.load() * 10);
-            }
+            uint8_t desiredLEDs = static_cast<uint8_t>(plant.powerPercentage.load() * 10);
+            // Clamp just in case of rounding overshoot
+            if (desiredLEDs > 10) desiredLEDs = 10;
             plant.powerBargraph->setValue(desiredLEDs);
         }
     }
