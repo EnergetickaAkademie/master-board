@@ -44,9 +44,13 @@ hw_timer_t *displayTimer = nullptr;
 #define ENCODER3_PIN_B 7
 #define ENCODER4_PIN_A 11
 #define ENCODER4_PIN_B 10
-// Encoder 5 pins - different for masterboard-005
+// Encoder 5 pins - configurable for different boards
+#ifndef ENCODER5_PIN_A
 #define ENCODER5_PIN_A 6
+#endif
+#ifndef ENCODER5_PIN_B
 #define ENCODER5_PIN_B 15
+#endif
 
 // We disable encoder button functionality by using sentinel value 255 for all
 #define ENCODER_NO_BUTTON 255
@@ -60,14 +64,11 @@ hw_timer_t *displayTimer = nullptr;
 #define COMPROT_PIN 19
 
 /* UART Communication with Retranslation Station */
-// For BOARD_ID 5 hardware the intended RX pin was miswired: design expected GPIO19 but
-// working connection is on GPIO48. Automatically switch and warn so firmware still works.
-#if defined(BOARD_ID) && (BOARD_ID == 5)
-#define UART_RX_PIN 48
-#define UART_RX_PIN_STR "48"
-#warning "Compiling board 5: assuming bad pin 19 switching to 48"
-#else
+// UART pins - configurable for different boards
+#ifndef UART_RX_PIN
 #define UART_RX_PIN 19
+#endif
+#ifndef UART_RX_PIN_STR
 #define UART_RX_PIN_STR "19"
 #endif
 #define UART_TX_PIN 47
@@ -388,9 +389,6 @@ bool connectToWiFi()
 void initUartCommunication()
 {
     uartComm.begin(9600, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
-#if defined(BOARD_ID) && (BOARD_ID == 5)
-    Serial.println(F("[UART][WARN] BOARD_ID=5: assuming bad pin 19, switching RX to 48"));
-#endif
     Serial.print(F("[UART] Robust communication initialized on pins RX="));
     Serial.print(UART_RX_PIN_STR);
     Serial.println(F(", TX=47, baud=9600"));
@@ -447,14 +445,31 @@ void initPeripherals()
                                      ENCODER_NO_BUTTON, 0, 1000, 1);
     encoder3 = factory.createEncoder(ENCODER3_PIN_B, ENCODER3_PIN_A,
                                      ENCODER_NO_BUTTON, 0, 1000, 1);
+    
+    // Encoder 4 - direction configurable for specific boards
+#ifdef REVERSE_ENCODER4_DIRECTION
+    encoder4 = factory.createEncoder(ENCODER4_PIN_A, ENCODER4_PIN_B,
+                                     ENCODER_NO_BUTTON, 0, 1000, 1);
+    Serial.println("[Peripherals] Encoder 4 (phys old 2) created - REVERSED DIRECTION");
+#else
     encoder4 = factory.createEncoder(ENCODER4_PIN_B, ENCODER4_PIN_A,
                                      ENCODER_NO_BUTTON, 0, 1000, 1);
+    Serial.println("[Peripherals] Encoder 4 (phys old 2) created");
+#endif
+
+    // Encoder 5 - direction configurable for specific boards
+#ifdef REVERSE_ENCODER5_DIRECTION
+    encoder5 = factory.createEncoder(ENCODER5_PIN_A, ENCODER5_PIN_B,
+                                     ENCODER_NO_BUTTON, 0, 1000, 1);
+    Serial.println("[Peripherals] Encoder 5 (new) created - REVERSED DIRECTION");
+#else
     encoder5 = factory.createEncoder(ENCODER5_PIN_B, ENCODER5_PIN_A,
                                      ENCODER_NO_BUTTON, 0, 1000, 1);
+    Serial.println("[Peripherals] Encoder 5 (new) created");
+#endif
+
     Serial.println("[Peripherals] Encoder 2 (phys old 1) created");
     Serial.println("[Peripherals] Encoder 3 (phys old 4) created");
-    Serial.println("[Peripherals] Encoder 4 (phys old 2) created");
-    Serial.println("[Peripherals] Encoder 5 (new) created");
     encoder1->setValue(500); // 50%
     encoder2->setValue(500); // 50%
     encoder3->setValue(500); // 50%
