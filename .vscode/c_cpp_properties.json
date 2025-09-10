@@ -530,6 +530,7 @@
                 "ARDUINO_EVENT_RUNNING_CORE=1",
                 "CORE_DEBUG_LEVEL=3",
                 "CONFIG_ARDUHAL_LOG_COLORS=1",
+                "PRODUCTION_SERVER_URL=\"https://enak.swpelc.eu\"",
                 "BOARD_ID=1",
                 "BOARD_NAME=\"MasterBoard-001\"",
                 "API_USERNAME=\"board1\"",

@@ -127,8 +127,8 @@ private:
     bool retranslationConnected;           // current evaluated connectivity state
     bool displayBlinkState;                // current blink phase
     unsigned long lastBlinkToggle;         // last toggle time
-    static constexpr unsigned long RETRANSLATION_TIMEOUT_MS = 3000;      // if no ping within 3s -> disconnected
-    static constexpr unsigned long PING_REQUEST_INTERVAL_MS = 2000;      // send status request every 2s
+    static constexpr unsigned long RETRANSLATION_TIMEOUT_MS = 9500;      // if no ping within 9.5s -> disconnected
+    static constexpr unsigned long PING_REQUEST_INTERVAL_MS = 3000;      // send status request every 3s
 
     // Throttling for server requests
     unsigned long lastRequestTime;

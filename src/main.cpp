@@ -388,7 +388,8 @@ bool connectToWiFi()
 
 void initUartCommunication()
 {
-    uartComm.begin(9600, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
+    uartComm.begin(115200, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
+    uartComm.setTimeout(50);  // Set 50ms timeout for better reliability
     Serial.print(F("[UART] Robust communication initialized on pins RX="));
     Serial.print(UART_RX_PIN_STR);
     Serial.println(F(", TX=47, baud=9600"));
