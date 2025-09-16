@@ -589,10 +589,22 @@ void GameManager::updateDisplaysImpl() {
             plant.powerDisplay->displayNumber(totalPowerForType);
         }
         if (plant.powerBargraph) {
-            // Calculate bargraph value: 0% encoder = 0 LEDs, 100% encoder = 10 LEDs
+            // Calculate bargraph value based on plant type:
+            // - For plants WITH encoders: use encoder percentage (powerPercentage)
+            // - For plants WITHOUT encoders: use production coefficient from server
             // The hardware is inverted: setValue(0) = fully lit, setValue(10) = not lit
             // So we invert: 0% → setValue(10), 100% → setValue(0)
-            uint8_t desiredLEDs = static_cast<uint8_t>(plant.powerPercentage.load() * 10);
+            
+            float displayValue;
+            if (plant.encoder != nullptr) {
+                // Plant has encoder - use encoder percentage
+                displayValue = plant.powerPercentage.load();
+            } else {
+                // Plant has no encoder - use production coefficient from server
+                displayValue = coefficient; // coefficient was already calculated above
+            }
+            
+            uint8_t desiredLEDs = static_cast<uint8_t>(displayValue * 10);
             // Clamp just in case of rounding overshoot
             if (desiredLEDs > 10) desiredLEDs = 10;
             plant.powerBargraph->setValue(desiredLEDs);
