@@ -574,7 +574,7 @@ void setup()
     // Production mode: directly use fixed server URL, no discovery.
     Serial.println("\n🌐 Production mode: using fixed server URL");
     const char *serverUrl = PRODUCTION_SERVER_URL;
-    serverConnected = gameManager.initEspApi(serverUrl, BOARD_NAME, SERVER_USERNAME, SERVER_PASSWORD);
+    serverConnected = gameManager.initEspApi(serverUrl, BOARD_NAME, API_USERNAME, API_PASSWORD);
     if (serverConnected) {
         Serial.printf("[ESP-API] ✅ Successfully connected to %s\n", serverUrl);
     } else {
@@ -590,7 +590,7 @@ void setup()
     if (serverIp) {
         Serial.printf("🎯 Server discovered at: %s\n", serverIp.toString().c_str());
         Serial.println("[ESP-API] Initializing via GameManager…");
-        serverConnected = gameManager.initEspApi(("http://" + serverIp.toString()).c_str(), BOARD_NAME, SERVER_USERNAME, SERVER_PASSWORD);
+        serverConnected = gameManager.initEspApi(("http://" + serverIp.toString()).c_str(), API_USERNAME, API_PASSWORD, SERVER_PASSWORD);
         if (serverConnected) {
             Serial.println("[ESP-API] ✅ Server connection and authentication successful");
         } else {

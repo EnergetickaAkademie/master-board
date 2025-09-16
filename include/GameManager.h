@@ -1,6 +1,6 @@
 #ifndef GAME_MANAGER_H
 #define GAME_MANAGER_H
-
+#include "board_config.h"
 #include <atomic>
 #include <vector>
 #include <array>
@@ -186,7 +186,7 @@ public:
         // Configure AsyncRequest with 2 workers for better throughput (can be increased if needed)
         AsyncRequest::configure(2, true);  // 2 workers, allow insecure TLS
         
-        espApi = new ESPGameAPI(serverUrl, boardName, BOARD_GENERIC, 500, 2000);
+        espApi = new ESPGameAPI(serverUrl, boardName, BOARD_GENERIC, API_UPDATE_INTERVAL_MS, COEFFICIENT_POLL_INTERVAL_MS);
         
         // Set up callbacks
         espApi->setProductionCallback([this]() { return getTotalProduction(); });
@@ -197,9 +197,6 @@ public:
             restoreConnectedBuildings(buildings);
         });
         
-        // Set intervals
-        espApi->setUpdateInterval(500);
-        espApi->setPollInterval(2000);
         
         // Login and register
         if (espApi->login(username, password) && espApi->registerBoard()) {
